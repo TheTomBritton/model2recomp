@@ -69,6 +69,7 @@ static uint8_t s_lamp_state = 0;
 
 void io_init(void)
 {
+    { const char *e = getenv("MODEL2_GUNRANGE"); if (e) io_set_gun_range(s_gun_xmin, s_gun_xmax, s_gun_ymin, s_gun_ymax); }
     memset(s_input_ports, 0xFF, sizeof(s_input_ports));
     memset(&s_lightgun, 0, sizeof(s_lightgun));
     memset(s_dpram, 0xFF, sizeof(s_dpram));
@@ -181,6 +182,10 @@ static bool gun_in_border(uint16_t x, uint16_t y)
 
 void io_set_gun_range(uint16_t xmin, uint16_t xmax, uint16_t ymin, uint16_t ymax)
 {
+    /* MODEL2_GUNRANGE=xmin,xmax,ymin,ymax overrides, so the generic corpus
+     * launcher can carry a title's range (Virtua Cop 2: 137,630,36,425). */
+    const char *e = getenv("MODEL2_GUNRANGE");
+    if (e) { unsigned a, b, c, d; if (sscanf(e, "%u,%u,%u,%u", &a, &b, &c, &d) == 4) { xmin = a; xmax = b; ymin = c; ymax = d; } }
     s_gun_xmin = xmin; s_gun_xmax = xmax;
     s_gun_ymin = ymin; s_gun_ymax = ymax;
 }
@@ -200,6 +205,14 @@ static void gun_position(int p, uint16_t *gx, uint16_t *gy)
 
 static uint8_t crx_gun_read(void)
 {
+    /* MODEL2_GUNTRACE=N: N reads of the mux, after the first 20000. */
+    static long left = -1, skip = 20000;
+    if (left < 0) { const char *e = getenv("MODEL2_GUNTRACE"); left = e ? atol(e) : 0; }
+    if (left > 0 && skip > 0) skip--;
+    else if (left > 0) {
+        uint16_t gx, gy; gun_position(0, &gx, &gy);
+        left--; fprintf(stderr, "[gun] mux=%u -> p1 x=%u y=%u raw=(%u,%u) off=%d\n", s_gun_mux, gx, gy, s_lightgun[0].x, s_lightgun[0].y, s_lightgun[0].offscreen);
+    }
     if (s_gun_mux < 8) {
         uint16_t gx, gy;
         gun_position(s_gun_mux >> 2, &gx, &gy);

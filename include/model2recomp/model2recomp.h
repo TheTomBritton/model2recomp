@@ -102,6 +102,9 @@ uint32_t model2recomp_field_sync(void);
  */
 void model2recomp_set_frame_limit(long fields);
 
+/* Fields completed so far (for diagnostics gated on a moment in the game). */
+long model2recomp_fields_done(void);
+
 /*
  * Write the current framebuffer to a binary PPM. Also happens automatically at
  * the frame limit when MODEL2_SCREENSHOT names a path.

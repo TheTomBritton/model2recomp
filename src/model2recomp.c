@@ -150,6 +150,13 @@ bool model2recomp_begin_frame(void)
     int mx, my;
     bool mleft, mright, mmiddle;
     platform_get_mouse(&mx, &my, &mleft, &mright, &mmiddle);
+    /* MODEL2_GUNPOS=x,y parks the gun for a headless run: the dummy video
+     * driver reports the pointer at 0,0, which is the off-screen corner. */
+    {
+        static int gx = -1, gy = -1, init;
+        if (!init) { init = 1; const char *e = getenv("MODEL2_GUNPOS"); if (e) sscanf(e, "%d,%d", &gx, &gy); }
+        if (gx >= 0) { mx = gx; my = gy; }
+    }
 
     /*
      * The mouse is player 1's lightgun. Left button fires at the crosshair;
@@ -373,6 +380,8 @@ void model2recomp_set_frame_limit(long fields)
     s_frame_limit = fields;
 }
 
+long model2recomp_fields_done(void) { return s_fields_done; }
+
 uint32_t model2recomp_field_sync(void)
 {
     static uint32_t s_next_field_ms = 0;
@@ -505,7 +514,9 @@ uint32_t model2recomp_field_sync(void)
                 every = e ? strtol(e, NULL, 10) : 0;
             }
             const char *shot = getenv("MODEL2_SCREENSHOT");
-            if (every > 0 && shot && (s_fields_done % every) == 0) {
+            static long from = -1;
+            if (from < 0) { const char *e = getenv("MODEL2_SHOT_FROM"); from = e ? strtol(e, NULL, 10) : 0; }
+            if (every > 0 && shot && s_fields_done >= from && (s_fields_done % every) == 0) {
                 char path[1024];
                 snprintf(path, sizeof(path), "%s.%05ld.ppm", shot, s_fields_done);
                 model2recomp_save_ppm(path);

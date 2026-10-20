@@ -16,6 +16,7 @@
 #include "model2recomp/bus.h"
 
 #include <math.h>
+#include "model2recomp/model2recomp.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -104,8 +105,13 @@ static bool s_ctrace_on;
 static void ctrace(const char *what, uint32_t a, uint32_t v)
 {
     if (s_ctrace < 0) { const char *e = getenv("MODEL2_COPROTRACE"); s_ctrace = e ? atol(e) : 0; }
-    if (!s_ctrace_on && v == 0x03000606u && what[0] == 'i') s_ctrace_on = true;
-    if (s_ctrace_on && s_ctrace > 0) { s_ctrace--; fprintf(stderr, "[c%s] %08X %08X\n", what, a, v); }
+    /* MODEL2_COPROTRACE_FROM=F starts the trace at field F instead of at the first 0x03000606. */
+    static long from = -1;
+    if (from < 0) { const char *e = getenv("MODEL2_COPROTRACE_FROM"); from = e ? atol(e) : 0; }
+    if (from > 0) { if (!s_ctrace_on && model2recomp_fields_done() >= from) s_ctrace_on = true; }
+    else if (!s_ctrace_on && v == 0x03000606u && what[0] == 'i') s_ctrace_on = true;
+    extern uint32_t g_cur_func;
+    if (s_ctrace_on && s_ctrace > 0) { s_ctrace--; fprintf(stderr, "[c%s] f%ld %08X %08X @%08X\n", what, model2recomp_fields_done(), a, v, g_cur_func); }
 }
 
 static void fifo_push(uint32_t *f, uint32_t *head, uint32_t tail, uint32_t v)
@@ -1005,10 +1011,13 @@ uint32_t copro_fifo_read(void)
     if (!s_have_mb86233)
         return 0;
     copro_pump();
-    if (s_out_head == s_out_tail)
+    if (s_out_head == s_out_tail) {
+        ctrace("rd", 0xEEEE, 0);          /* the i960 read an empty output FIFO: it gets a zero */
         return 0;
+    }
     uint32_t v = s_out[s_out_tail];
     s_out_tail = (s_out_tail + 1) % FIFO_MAX;
+    ctrace("rd", 0, v);
     return v;
 }
 

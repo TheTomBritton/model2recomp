@@ -416,7 +416,7 @@ class I960Lifter:
             elif opcode == 0x17:  # bo
                 lines.append(f'/* bo 0x{target:08X} - branch if ordered */')
             else:
-                lines.append(f'/* TODO: ctrl opcode 0x{opcode:02X} target 0x{target:08X} */')
+                lines.append(f'i960_todo(0x{addr:08X}, 0x{word:08X}); /* TODO: ctrl opcode 0x{opcode:02X} target 0x{target:08X} */')
             return lines, ret_size
 
         # ---- COBR format ----
@@ -502,7 +502,7 @@ class I960Lifter:
                 lines.append(f'op_cmpi((int32_t){src1}, (int32_t){src2});')
                 lines.append(f'if (i960_test_cc(COND_LE)) goto L_{target:08X}; /* cmpible */')
             else:
-                lines.append(f'/* TODO: COBR opcode 0x{opcode:02X} */')
+                lines.append(f'i960_todo(0x{addr:08X}, 0x{word:08X}); /* TODO: COBR opcode 0x{opcode:02X} */')
             return lines, ret_size
 
         # ---- REG format ----
@@ -692,7 +692,7 @@ class I960Lifter:
                 elif ext in binary:
                     lines.append(f_dst(binary[ext], lr) + f' /* op{ext:X}{suffix} */')
                 else:
-                    lines.append(f'/* TODO: REG opcode=(0x{opcode:02X}, 0x{ext:X}) word=0x{word:08X} */')
+                    lines.append(f'i960_todo(0x{addr:08X}, 0x{word:08X}); /* TODO: REG opcode=(0x{opcode:02X}, 0x{ext:X}) word=0x{word:08X} */')
 
             # ---- 0x6C9 movr / 0x6D9 movrl / 0x6E1 movre ----
             elif key == (0x6C, 0x09):
@@ -742,7 +742,7 @@ class I960Lifter:
                 lines.append(f_dst(expr, lr) + f' /* {mnem}r{"l" if lr else ""} */')
 
             else:
-                lines.append(f'/* TODO: REG opcode=(0x{opcode:02X}, 0x{ext:X}) word=0x{word:08X} */')
+                lines.append(f'i960_todo(0x{addr:08X}, 0x{word:08X}); /* TODO: REG opcode=(0x{opcode:02X}, 0x{ext:X}) word=0x{word:08X} */')
             return lines, ret_size
 
         # ---- MEM format ----
@@ -891,7 +891,7 @@ class I960Lifter:
             elif opcode == 0xCA:  # stis
                 lines.append(f'op_stos((uint16_t){reg}, {ea}); /* stis */')
             else:
-                lines.append(f'/* TODO: MEM opcode 0x{opcode:02X} ea={comment_safe(ea)} */')
+                lines.append(f'i960_todo(0x{addr:08X}, 0x{word:08X}); /* TODO: MEM opcode 0x{opcode:02X} ea={comment_safe(ea)} */')
             ret_size = inst_size
             return lines, ret_size
 

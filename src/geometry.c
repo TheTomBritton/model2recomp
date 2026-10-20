@@ -25,6 +25,7 @@
 #include <math.h>
 #include <float.h>
 #include <stdbool.h>
+#include "model2recomp/model2recomp.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -370,6 +371,21 @@ static void model2_3d_process_polygon(uint32_t attr, int num_verts)
 
     luma = (uint8_t)((raster->command_buffer[9] >> 15) & 0xFF);
 
+    /* MODEL2_BLACKPOLY=N: N polygons whose luma word reads as zero, from field
+     * MODEL2_LIGHTDUMP_FROM, with the words round them - a luma of zero is a
+     * black polygon, and a float in that slot means the stream has slipped. */
+    {
+        static long left = -1, from;
+        if (left < 0) { const char *e = getenv("MODEL2_BLACKPOLY"); left = e ? atol(e) : 0; e = getenv("MODEL2_LIGHTDUMP_FROM"); from = e ? atol(e) : 0; }
+        if (left > 0 && luma == 0 && model2recomp_fields_done() >= from) {
+            left--;
+            fprintf(stderr, "[blackpoly] f%ld nv=%d attr=%08X buf[8..16]=%08X %08X %08X %08X %08X %08X %08X %08X %08X tho=%d\n",
+                    model2recomp_fields_done(), num_verts, attr,
+                    raster->command_buffer[8], raster->command_buffer[9], raster->command_buffer[10], raster->command_buffer[11],
+                    raster->command_buffer[12], raster->command_buffer[13], raster->command_buffer[14], raster->command_buffer[15], raster->command_buffer[16], tho);
+        }
+    }
+
     texlod = ((int32_t)(raster->command_buffer[10] >> 8) & 0x7F80) - 0x3F80;
     texlod += raster->log_ram[raster->command_buffer[10] & 0x7FFF];
 
@@ -432,11 +448,18 @@ static void model2_3d_process_polygon(uint32_t attr, int num_verts)
             for (uint32_t i = 0; i < 6; i++)
                 raster->command_buffer[2 + i] = raster->command_buffer[11 + i];
             break;
-        case 1:
+        case 1:                                 /* reuse P0(n-1) and P0(n): P0(n) -> P1(n-1) */
             for (uint32_t i = 0; i < 3; i++)
                 raster->command_buffer[5 + i] = raster->command_buffer[11 + i];
             break;
-        default:
+        case 3:                                 /* reuse P1(n-1) and P1(n): P1(n) -> P0(n-1) */
+            /* This case was missing: the carried vertex went stale and the next
+             * polygon of the strip stretched to a point from two polygons back.
+             * Virtua Cop 2 links most of its scenery this way - the long slivers
+             * across its streets and shop interiors, and walls the size of the
+             * screen, were all this. MAME's model2_3d_process_polygon has it. */
+            for (uint32_t i = 0; i < 3; i++)
+                raster->command_buffer[2 + i] = raster->command_buffer[14 + i];
             break;
     }
 }
@@ -676,20 +699,6 @@ static void geo_parse_polygons(stream_t *in, uint32_t count,
         float dotl = dot_product(&normal, &s_geo->light);
         float dotp = dot_product(&normal, &point);
 
-        /* MODEL2_LIGHTDUMP=N: how the first N polygons of a field are lit. */
-        {
-            static int left = -1;
-            if (left < 0) { const char *e = getenv("MODEL2_LIGHTDUMP"); left = e ? atoi(e) : 0; }
-            if (left > 0) {
-                left--;
-                const texparam_t *tp = &s_geo->texture_parameters[(attr >> 18) & 0x1F];
-                fprintf(stderr, "[light] attr=%08X tex#%u normals=%d n=(%.3f %.3f %.3f) light=(%.3f %.3f %.3f) dotl=%.3f dotp=%.1f diffuse=%.3f ambient=%.3f spec=%.3f/%u\n",
-                        attr, (attr >> 18) & 0x1F, have_normals, normal.x, normal.y, normal.pz,
-                        s_geo->light.x, s_geo->light.y, s_geo->light.pz, dotl, dotp,
-                        tp->diffuse, tp->ambient, tp->specular_scale, tp->specular_control);
-            }
-        }
-
         apply_focus(&point);
 
         /* Front or back face, which the rasterizer reads out of the luma. */
@@ -716,6 +725,25 @@ static void geo_parse_polygons(stream_t *in, uint32_t count,
         if (luminance > 255.0f)   luminance = 255.0f;
 
         int32_t luma = (int32_t)luminance + (int32_t)face;
+
+        /* MODEL2_LIGHTDUMP=N: how N polygons are lit, from field MODEL2_LIGHTDUMP_FROM
+         * (0 = from the start); MODEL2_LIGHTDUMP_ZERO=1 reports only those that came out
+         * with a luma of zero - the black ones. */
+        {
+            static long left = -1, from, zero_only;
+            if (left < 0) {
+                const char *e = getenv("MODEL2_LIGHTDUMP"); left = e ? atol(e) : 0;
+                e = getenv("MODEL2_LIGHTDUMP_FROM"); from = e ? atol(e) : 0;
+                e = getenv("MODEL2_LIGHTDUMP_ZERO"); zero_only = e ? atol(e) : 0;
+            }
+            if (left > 0 && model2recomp_fields_done() >= from && (!zero_only || (luma & 0xFF) == 0)) {
+                left--;
+                fprintf(stderr, "[light] f%ld attr=%08X slot=%u normals=%d n=(%.3f %.3f %.3f) p=(%.1f %.1f %.1f) light=(%.3f %.3f %.3f) dotl=%.3f dotp=%.1f diffuse=%g ambient=%g lum=%.1f luma=%d face=%d\n",
+                        model2recomp_fields_done(), attr, (attr >> 18) & 0x1F, have_normals, normal.x, normal.y, normal.pz,
+                        point.x, point.y, point.pz, s_geo->light.x, s_geo->light.y, s_geo->light.pz, dotl, dotp,
+                        tex->diffuse, tex->ambient, luminance, luma, (int)face);
+            }
+        }
 
         float coef = s_geo->coef_table[(attr >> 27) & 0x1F];
         float distance = coef * fabsf(dotp) * s_geo->lod;
