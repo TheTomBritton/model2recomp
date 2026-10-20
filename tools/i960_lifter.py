@@ -76,6 +76,44 @@ class I960Lifter:
         self.functions = {}   # addr -> list of C lines
         self.call_targets = set()
         self.branch_targets = defaultdict(set)  # func_addr -> set of label addrs
+        # Every function that will be lifted, and the C prefix they are named
+        # with: a branch or fall-through into one of them is emitted as a
+        # direct tail call (see transfer_to) instead of a table dispatch.
+        self.known = set()
+        self.prefix = None
+        # The second word of every two-word (MEMB, 32-bit displacement)
+        # instruction decoded so far. Discovery sometimes names one of those
+        # words a function - Virtua Cop 2 has a run of 220 "functions" in
+        # 1.75 KB of lighting and palette code, nearly one per word - and a
+        # lift that starts on it executes the displacement as an instruction:
+        # 0x12200000 is "be +0x200000", a conditional branch into program RAM
+        # that returns early whenever the condition happens to hold. Functions
+        # are lifted in address order, so by the time such a start is lifted
+        # the instruction it sits inside has already been seen; the lift then
+        # begins at the word after it, which is where the fall-through from the
+        # previous fragment belongs anyway.
+        self.disp_words = set()
+
+    def transfer_to(self, tgt):
+        """C for control leaving this function for the function at tgt.
+
+        A branch into another function is a jump on the i960: no frame is
+        pushed, and the landing function's "ret" pops the frame this one is
+        in. Dispatching it through func_table_call made it a host call, so a
+        loop the lifter had split into one-instruction fragments - each
+        falling through or branching back into the next - nested the host
+        stack once per guest instruction per iteration. Virtua Cop 2's
+        colour-ramp fill reached 400,000 deep and was abandoned part-way,
+        which left most of its palette unwritten and its stages black.
+
+        A real tail call costs nothing: clang's musttail (M2_TAILCALL, in
+        i960_ops.h) makes it a jump natively and on wasm with tail calls.
+        Only a target that is known to be lifted can be called directly; the
+        rest keep the guarded dispatch, whose miss gives the frame back.
+        """
+        if self.known and tgt in self.known and self.prefix:
+            return f'M2_TAILCALL return {self.prefix}_{tgt:08X}();'
+        return f'if (!func_table_call(0x{tgt:08X})) i960_do_ret(); return;'
 
     def read32(self, offset):
         if offset + 4 <= len(self.data):
@@ -85,7 +123,11 @@ class I960Lifter:
     def lift_function(self, func_addr, end_addr=None):
         """Lift one function starting at func_addr to C code."""
         lines = []
-        offset = func_addr
+        start = func_addr
+        if func_addr in self.disp_words:
+            lines.append(f'    /* 0x{func_addr:08X} is the displacement word of the instruction before it, not code: lifted from 0x{func_addr + 4:08X} */')
+            start = func_addr + 4
+        offset = start
         max_addr = end_addr if end_addr else min(func_addr + 0x10000, len(self.data))
 
         # First pass: find branch targets within this function, and the
@@ -100,7 +142,7 @@ class I960Lifter:
         local_labels = set()
         holds_g14 = set()
         leaf_returns = set()
-        scan_offset = func_addr
+        scan_offset = start
         while scan_offset < max_addr:
             word = self.read32(scan_offset)
             opcode = (word >> 24) & 0xFF
@@ -111,6 +153,7 @@ class I960Lifter:
                 mode = (word >> 10) & 0xF
                 if mode in (0x5, 0xC, 0xD, 0xE, 0xF):  # modes with disp32
                     inst_size = 8
+                    self.disp_words.add(scan_offset + 4)
 
             # Find branch targets
             target = None
@@ -202,8 +245,7 @@ class I960Lifter:
                 # dispatch, so an unguarded miss leaks a frame per iteration.
                 # Virtua Cop 2's colour-ramp fill is exactly that shape.
                 lines.append(f'    /* falls through into 0x{max_addr:08X} */')
-                lines.append(f'    if (!func_table_call(0x{max_addr:08X})) i960_do_ret();')
-                lines.append(f'    return;')
+                lines.append(f'    {self.transfer_to(max_addr)}')
 
         self.functions[func_addr] = lines
         return lines
@@ -215,14 +257,14 @@ class I960Lifter:
             text = line.strip()
             if not text or text.startswith('/*') or text.endswith(': ;'):
                 continue
-            return text == 'return;' or text.startswith('goto ')
+            return (text == 'return;' or text.startswith('goto ')
+                    or text.startswith('M2_TAILCALL return '))
         return False
 
         self.functions[func_addr] = lines
         return lines
 
-    @staticmethod
-    def _fixup_dangling_gotos(lines):
+    def _fixup_dangling_gotos(self, lines):
         """Rewrite any goto whose target label was never emitted.
 
         Out-of-range branches (and bytes misdecoded as code in data regions)
@@ -272,8 +314,7 @@ class I960Lifter:
                 # Registering the landing sites instead was measured and kills
                 # the attract 3D: splitting a genuine function costs more than
                 # a leak does.
-                return (f'{{ if (!func_table_call(0x{tgt})) i960_do_ret();'
-                        f' return; }}')
+                return '{ ' + self.transfer_to(int(tgt, 16)) + ' }'
             return repl
 
         return [_GOTO_RE.sub(make_repl(ln.rstrip().endswith('/* bal */')), ln)
@@ -1275,6 +1316,8 @@ def main():
 
     # Lift all functions
     lifter = I960Lifter(data)
+    lifter.known = set(func_addrs)
+    lifter.prefix = prefix
     total_lines = 0
 
     # Determine function boundaries. A function ends where the next one

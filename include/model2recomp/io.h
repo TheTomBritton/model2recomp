@@ -61,6 +61,10 @@ uint8_t io_get_input(int port);
 void io_set_lightgun(int player, uint16_t x, uint16_t y, bool offscreen);
 lightgun_state_t io_get_lightgun(int player);
 
+/* The gun's calibrated 10-bit range, MAME's PORT_MINMAX for the title. Defaults
+ * to Virtua Cop's; Virtua Cop 2 is (137, 630, 36, 425). */
+void io_set_gun_range(uint16_t xmin, uint16_t xmax, uint16_t ymin, uint16_t ymax);
+
 /* Lightgun data read (0x00E80040+) */
 /* Copy the current input and lightgun state into DPRAM where the game reads
  * it. Call once per field, after the platform layer has sampled the host.

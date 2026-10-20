@@ -14,6 +14,35 @@
 
 #include <SDL.h>
 #include <stdio.h>
+#include <stdlib.h>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+/*
+ * The browser build. The recompiled game owns the frame loop and never
+ * returns, so the page cannot be driven from a host loop: the build uses JSPI
+ * and the field boundary suspends the whole wasm stack here, which is when
+ * the browser paints the canvas and delivers input. One field per animation
+ * frame on a 60 Hz display (the board's 57.5 Hz, near enough); a faster
+ * display is paced to the board's period.
+ */
+EM_ASYNC_JS(void, platform_web_wait_field, (double period_ms), {
+  const raf = () => new Promise(r => requestAnimationFrame(r));
+  const st = Module.__m2field || (Module.__m2field = { next: 0, raf: 16.7, last: 0 });
+  const t0 = performance.now();
+  if (!st.next || t0 - st.next > 250) st.next = t0;   /* first field, or far behind: re-anchor, no catch-up */
+  st.next += period_ms;
+  await raf();
+  const t1 = performance.now();
+  if (st.last) st.raf = st.raf * 0.9 + (t1 - st.last) * 0.1;   /* the display's refresh period, smoothed */
+  st.last = t1;
+  if (st.raf < period_ms * 0.75) {                     /* > ~75 Hz display: wait out the rest of the period */
+    while (performance.now() < st.next - st.raf * 0.5) await raf();
+  } else if (t1 < st.next - period_ms) {               /* 60 Hz display runs the board at 60: never let the */
+    st.next = t1;                                      /* schedule drift ahead into a double-length frame */
+  }
+});
+#endif
 
 static SDL_Window   *s_window = NULL;
 static SDL_Renderer *s_renderer = NULL;
@@ -26,6 +55,48 @@ static int s_height = 0;
 static uint64_t s_frame_start = 0;
 static const double FRAME_TIME_MS = 1000.0 / 57.5; /* Model 2 runs at ~57.5 Hz */
 
+/*
+ * A light gun's border: a white frame round the picture for a camera gun
+ * (Sinden) to find the screen by, with a black gap inside it so a bright
+ * scene never merges with the band - the same construction the Time Crisis
+ * engines draw. Both are a percentage of the window's short edge; the
+ * picture is the largest 4:3 that fits inside. Off by default; a page or a
+ * launcher sets it, and the mouse is mapped through the same rectangle so
+ * the aim lands where the picture is.
+ */
+static int s_border_pct = 0;
+static int s_gap_pct = 0;
+
+void platform_set_gun_border(int border_pct, int gap_pct)
+{
+    if (border_pct < 0) border_pct = 0;
+    if (gap_pct < 0) gap_pct = 0;
+    if (border_pct + gap_pct > 6) gap_pct = 6 - border_pct;
+    if (gap_pct < 0) { gap_pct = 0; border_pct = 6; }
+    s_border_pct = border_pct;
+    s_gap_pct = gap_pct;
+}
+
+static int border_px(int W, int H, int pct)
+{
+    int m = W < H ? W : H;
+    return pct > 0 ? (pct * m) / 100 : 0;
+}
+
+/* The picture inside a W x H window, in the same pixels. */
+static SDL_Rect picture_rect(int W, int H, int *border)
+{
+    int b = border_px(W, H, s_border_pct);
+    int inner = s_gap_pct > 0 ? border_px(W, H, s_border_pct + s_gap_pct) : b;
+    int ow = W - 2 * inner, oh = H - 2 * inner;
+    int w, h;
+    if (ow * 3 <= oh * 4) { w = ow; h = (ow * 3) / 4; }
+    else                  { h = oh; w = (oh * 4) / 3; }
+    SDL_Rect r = { inner + (ow - w) / 2, inner + (oh - h) / 2, w, h };
+    if (border) *border = b;
+    return r;
+}
+
 bool platform_init(const char *title, int width, int height, int scale)
 {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) < 0) {
@@ -36,11 +107,20 @@ bool platform_init(const char *title, int width, int height, int scale)
     s_width = width;
     s_height = height;
 
+#ifdef __EMSCRIPTEN__
+    /* The page's canvas: keys go to it (not the whole page), and it keeps the
+     * board's own pixel size - the page's CSS scales it. */
+    SDL_SetHint(SDL_HINT_EMSCRIPTEN_KEYBOARD_ELEMENT, "#canvas");
+    scale = 1;
+    const uint32_t wflags = SDL_WINDOW_SHOWN;
+#else
+    const uint32_t wflags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+#endif
     s_window = SDL_CreateWindow(
         title,
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         width * scale, height * scale,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
+        wflags
     );
     if (!s_window) {
         fprintf(stderr, "[platform] Window creation failed: %s\n", SDL_GetError());
@@ -159,8 +239,20 @@ void platform_present_frame(const uint8_t *framebuffer, int width, int height)
     if (!s_texture || !s_renderer || !framebuffer) return;
 
     SDL_UpdateTexture(s_texture, NULL, framebuffer, width * 4);
-    SDL_RenderClear(s_renderer);
-    SDL_RenderCopy(s_renderer, s_texture, NULL, NULL);
+    if (s_border_pct > 0) {
+        int b;
+        SDL_Rect pic = picture_rect(s_width, s_height, &b);
+        SDL_Rect gap = { b, b, s_width - 2 * b, s_height - 2 * b };
+        SDL_SetRenderDrawColor(s_renderer, 255, 255, 255, 255);   /* the border */
+        SDL_RenderClear(s_renderer);
+        SDL_SetRenderDrawColor(s_renderer, 0, 0, 0, 255);         /* the gap, and the letterbox */
+        SDL_RenderFillRect(s_renderer, &gap);
+        SDL_RenderCopy(s_renderer, s_texture, NULL, &pic);
+    } else {
+        SDL_SetRenderDrawColor(s_renderer, 0, 0, 0, 255);
+        SDL_RenderClear(s_renderer);
+        SDL_RenderCopy(s_renderer, s_texture, NULL, NULL);
+    }
     SDL_RenderPresent(s_renderer);
 }
 
@@ -189,6 +281,14 @@ bool platform_fast_mode(void)
 
 void platform_frame_sync(void)
 {
+#ifdef __EMSCRIPTEN__
+    /* Every field yields to the browser, fast mode or not: a page that never
+     * suspends never paints. Fast mode only drops the pacing. */
+    if (platform_fast_mode()) { emscripten_sleep(0); return; }
+    platform_web_wait_field(FRAME_TIME_MS);
+    s_frame_start = SDL_GetPerformanceCounter();
+    return;
+#endif
     if (platform_fast_mode())
         return;
 
@@ -221,12 +321,22 @@ void platform_get_mouse(int *x, int *y, bool *left_button, bool *right_button,
         return;
     }
 
-    /* Scale mouse coordinates to game resolution */
+    /* Scale mouse coordinates to game resolution, through the picture's
+     * rectangle when a border is drawn: aiming at the border reads as past
+     * the edge, which the game takes as off-screen. */
     int ww, wh;
     SDL_GetWindowSize(s_window, &ww, &wh);
-
-    if (x) *x = (mx * s_width) / ww;
-    if (y) *y = (my * s_height) / wh;
+    int gx = (mx * s_width) / ww;
+    int gy = (my * s_height) / wh;
+    if (s_border_pct > 0) {
+        SDL_Rect pic = picture_rect(s_width, s_height, NULL);
+        gx = pic.w > 0 ? ((gx - pic.x) * s_width) / pic.w : gx;
+        gy = pic.h > 0 ? ((gy - pic.y) * s_height) / pic.h : gy;
+        if (gx < 0) gx = 0; if (gx >= s_width) gx = s_width - 1;
+        if (gy < 0) gy = 0; if (gy >= s_height) gy = s_height - 1;
+    }
+    if (x) *x = gx;
+    if (y) *y = gy;
     if (left_button)   *left_button   = (buttons & SDL_BUTTON_LMASK) != 0;
     if (right_button)  *right_button  = (buttons & SDL_BUTTON_RMASK) != 0;
     if (middle_button) *middle_button = (buttons & SDL_BUTTON_MMASK) != 0;

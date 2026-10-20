@@ -40,6 +40,11 @@ bool platform_fast_mode(void);
 void platform_get_mouse(int *x, int *y, bool *left_button, bool *right_button,
                         bool *middle_button);
 
+/* A light gun's white border round the picture, with a black gap inside it,
+ * each a whole percentage of the short edge (0 = none, border + gap <= 6).
+ * The mouse is mapped through the picture that remains. */
+void platform_set_gun_border(int border_pct, int gap_pct);
+
 /* Get keyboard state */
 bool platform_key_pressed(int scancode);
 

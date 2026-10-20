@@ -4,8 +4,17 @@ project(model2recomp C)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Find SDL2
-find_package(SDL2 REQUIRED)
+# Find SDL2. The browser build (emcmake cmake -S . -B build-web) takes SDL2 from
+# Emscripten's ports instead; the imported targets below stand in for the ones
+# find_package would have made so the rest of this file reads the same.
+if(EMSCRIPTEN)
+    add_compile_options(-sUSE_SDL=2)
+    add_link_options(-sUSE_SDL=2)
+    add_library(SDL2::SDL2 INTERFACE IMPORTED)
+    add_library(SDL2::SDL2main INTERFACE IMPORTED)
+else()
+    find_package(SDL2 REQUIRED)
+endif()
 
 # --- model2recomp static library ---
 add_library(model2recomp STATIC
@@ -125,4 +134,44 @@ if(MODEL2RECOMP_CORPUS_DIR)
             RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/corpus"
             RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/corpus")
     endforeach()
+endif()
+
+# --- Browser build of one set -------------------------------------------------
+#
+#   emcmake cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release \
+#       -DMODEL2RECOMP_CORPUS_DIR=$PWD/corpus -DMODEL2RECOMP_WEB_SET=vcop2
+#   cmake --build build-web --target vcop2web
+#
+# A per-title launcher in examples/<set>web/main.c, the set's lifted code from
+# the corpus tree (ROM-derived, never committed), and the library, linked as a
+# JSPI wasm module the game page boots: see src/platform_sdl.c for the field
+# boundary. The lifted code's loop-as-recursion needs no giant stack here
+# because its tail dispatches are real tail calls (tools/i960_lifter.py,
+# M2_TAILCALL) and the wasm target has tail calls (-mtail-call).
+set(MODEL2RECOMP_WEB_SET "" CACHE STRING "Set to build as a browser module (needs MODEL2RECOMP_CORPUS_DIR)")
+if(EMSCRIPTEN AND MODEL2RECOMP_WEB_SET)
+    set(_set ${MODEL2RECOMP_WEB_SET})
+    set(_dir "${MODEL2RECOMP_CORPUS_DIR}/${_set}")
+    if(NOT EXISTS "${_dir}/recomp/game_register.c")
+        message(FATAL_ERROR "no lifted code at ${_dir}/recomp: run tools/corpus.py extract+lift ${_set} first")
+    endif()
+    file(GLOB _src CONFIGURE_DEPENDS "${_dir}/recomp/game_code_*.c")
+    add_executable(${_set}web
+        "${CMAKE_CURRENT_SOURCE_DIR}/examples/${_set}web/main.c"
+        "${_dir}/recomp/game_register.c" ${_src})
+    target_include_directories(${_set}web PRIVATE "${_dir}/include")
+    target_link_libraries(${_set}web PRIVATE model2recomp)
+    target_compile_options(${_set}web PRIVATE -w -mtail-call)
+    target_compile_options(model2recomp PRIVATE -mtail-call)
+    string(TOUPPER "${_set}" _SET)
+    target_link_options(${_set}web PRIVATE
+        -mtail-call
+        -sJSPI=1
+        -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=335544320 -sSTACK_SIZE=67108864
+        -sMODULARIZE=1 -sEXPORT_NAME=createModel2_${_set} -sENVIRONMENT=web
+        -sINVOKE_RUN=0
+        -sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV,ccall
+        -sEXPORTED_FUNCTIONS=_main,_platform_set_gun_border
+        -sEXIT_RUNTIME=0)
+    set_target_properties(${_set}web PROPERTIES OUTPUT_NAME "${_set}" SUFFIX ".js")
 endif()

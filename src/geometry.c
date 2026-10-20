@@ -676,6 +676,20 @@ static void geo_parse_polygons(stream_t *in, uint32_t count,
         float dotl = dot_product(&normal, &s_geo->light);
         float dotp = dot_product(&normal, &point);
 
+        /* MODEL2_LIGHTDUMP=N: how the first N polygons of a field are lit. */
+        {
+            static int left = -1;
+            if (left < 0) { const char *e = getenv("MODEL2_LIGHTDUMP"); left = e ? atoi(e) : 0; }
+            if (left > 0) {
+                left--;
+                const texparam_t *tp = &s_geo->texture_parameters[(attr >> 18) & 0x1F];
+                fprintf(stderr, "[light] attr=%08X tex#%u normals=%d n=(%.3f %.3f %.3f) light=(%.3f %.3f %.3f) dotl=%.3f dotp=%.1f diffuse=%.3f ambient=%.3f spec=%.3f/%u\n",
+                        attr, (attr >> 18) & 0x1F, have_normals, normal.x, normal.y, normal.pz,
+                        s_geo->light.x, s_geo->light.y, s_geo->light.pz, dotl, dotp,
+                        tp->diffuse, tp->ambient, tp->specular_scale, tp->specular_control);
+            }
+        }
+
         apply_focus(&point);
 
         /* Front or back face, which the rasterizer reads out of the luma. */

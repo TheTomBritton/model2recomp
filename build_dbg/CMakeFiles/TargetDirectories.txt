@@ -1,0 +1,4 @@
+/Users/tombritton/Claude01/browsergames/model2recomp/build_dbg/CMakeFiles/model2recomp.dir
+/Users/tombritton/Claude01/browsergames/model2recomp/build_dbg/CMakeFiles/corpus_vcop2.dir
+/Users/tombritton/Claude01/browsergames/model2recomp/build_dbg/CMakeFiles/edit_cache.dir
+/Users/tombritton/Claude01/browsergames/model2recomp/build_dbg/CMakeFiles/rebuild_cache.dir

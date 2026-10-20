@@ -29,7 +29,7 @@
  * accidentally shielding them. Raising this is the second half of a fix whose
  * first half is the lifter not emitting those functions - see
  * docs/technical/porting-targets.md. */
-#define TABLE_SIZE 8192
+#define TABLE_SIZE 16384
 #define TABLE_MASK (TABLE_SIZE - 1)
 
 /* The recursion guard, and it is a guard rather than a model of anything: the

@@ -51,6 +51,19 @@ static uint8_t s_dpram[0x1000];
 #define GUN_Y_MAX 0x1A9
 #define GUN_BORDER 0.05f    /* fraction of range that counts as off-screen */
 
+/* The calibrated range is per title (MAME's PORT_MINMAX): Virtua Cop's by
+ * default, and a port sets its own with io_set_gun_range(). */
+static uint16_t s_gun_xmin = GUN_X_MIN, s_gun_xmax = GUN_X_MAX;
+static uint16_t s_gun_ymin = GUN_Y_MIN, s_gun_ymax = GUN_Y_MAX;
+static uint16_t s_screen_w = 496, s_screen_h = 384;
+
+/* CRX light gun (Virtua Cop 2, Gunblade NY, House of the Dead): an ALTERA
+ * FLEX + 315-5338A behind the 315-5649's RS-422 channel 2. The game writes a
+ * mux index and reads a byte back: 0-7 are the low/high bytes of P1 Y, P1 X,
+ * P2 Y, P2 X, anything else is the off-screen flags. MAME model2.cpp
+ * lightgun_mux_r/w, lightgun_data_r, lightgun_offscreen_r. */
+static uint8_t s_gun_mux;
+
 /* Lamp output */
 static uint8_t s_lamp_state = 0;
 
@@ -159,15 +172,54 @@ static uint16_t gun_scale(uint16_t v, uint16_t range, uint16_t lo, uint16_t hi)
 
 static bool gun_in_border(uint16_t x, uint16_t y)
 {
-    int bx = (int)((GUN_X_MAX - GUN_X_MIN) * GUN_BORDER);
-    int by = (int)((GUN_Y_MAX - GUN_Y_MIN) * GUN_BORDER);
+    int bx = (int)((s_gun_xmax - s_gun_xmin) * GUN_BORDER);
+    int by = (int)((s_gun_ymax - s_gun_ymin) * GUN_BORDER);
 
-    return x <= GUN_X_MIN + bx || x >= GUN_X_MAX - bx ||
-           y <= GUN_Y_MIN + by || y >= GUN_Y_MAX - by;
+    return x <= s_gun_xmin + bx || x >= s_gun_xmax - bx ||
+           y <= s_gun_ymin + by || y >= s_gun_ymax - by;
+}
+
+void io_set_gun_range(uint16_t xmin, uint16_t xmax, uint16_t ymin, uint16_t ymax)
+{
+    s_gun_xmin = xmin; s_gun_xmax = xmax;
+    s_gun_ymin = ymin; s_gun_ymax = ymax;
+}
+
+/* One player's gun in the calibrated 10-bit range; a forced off-screen shot
+ * parks it at the minimum, because the game cross-checks the coordinates
+ * against the flag (see io_update_dpram). */
+static void gun_position(int p, uint16_t *gx, uint16_t *gy)
+{
+    *gx = gun_scale(s_lightgun[p].x, s_screen_w, s_gun_xmin, s_gun_xmax);
+    *gy = gun_scale(s_lightgun[p].y, s_screen_h, s_gun_ymin, s_gun_ymax);
+    if (s_lightgun[p].offscreen) {
+        *gx = s_gun_xmin;
+        *gy = s_gun_ymin;
+    }
+}
+
+static uint8_t crx_gun_read(void)
+{
+    if (s_gun_mux < 8) {
+        uint16_t gx, gy;
+        gun_position(s_gun_mux >> 2, &gx, &gy);
+        uint16_t v = (s_gun_mux & 2) ? gx : gy;        /* ports: P1 Y, P1 X, P2 Y, P2 X */
+        return (s_gun_mux & 1) ? (uint8_t)(v >> 8) : (uint8_t)v;
+    }
+    uint16_t data = 0xFFFC;
+    for (int p = 0; p < 2; p++) {
+        uint16_t gx, gy;
+        gun_position(p, &gx, &gy);
+        if (s_lightgun[p].offscreen || gun_in_border(gx, gy))
+            data |= (uint16_t)(1 << p);
+    }
+    return (uint8_t)data;
 }
 
 void io_update_dpram(uint16_t screen_w, uint16_t screen_h)
 {
+    s_screen_w = screen_w;
+    s_screen_h = screen_h;
     s_dpram[DPRAM_IN0] = s_input_ports[0];
     s_dpram[DPRAM_IN1] = s_input_ports[1];
     s_dpram[DPRAM_IN2] = s_input_ports[2];
@@ -176,17 +228,12 @@ void io_update_dpram(uint16_t screen_w, uint16_t screen_h)
     uint8_t offscreen = 0xFC;   /* bits 0-1 are the per-player flags */
 
     for (int p = 0; p < 2; p++) {
-        uint16_t gx = gun_scale(s_lightgun[p].x, screen_w, GUN_X_MIN, GUN_X_MAX);
-        uint16_t gy = gun_scale(s_lightgun[p].y, screen_h, GUN_Y_MIN, GUN_Y_MAX);
-
         /* Shooting off-screen is how Virtua Cop reloads, so a forced
          * off-screen shot has to read as one: park the gun outside the
          * calibrated range rather than only setting the flag, because the
          * game cross-checks the coordinates against it. */
-        if (s_lightgun[p].offscreen) {
-            gx = GUN_X_MIN;
-            gy = GUN_Y_MIN;
-        }
+        uint16_t gx, gy;
+        gun_position(p, &gx, &gy);
 
         uint32_t base = DPRAM_GUN + p * 4;
         s_dpram[base + 0] = (uint8_t)gy;
@@ -256,13 +303,22 @@ uint8_t sega5649_read(uint8_t offset)
             return eeprom93c46_port_b(io_get_input(0));
         /* Port G in counter mode reads four 16-bit counters; nothing here
          * drives them, so it falls through to the ordinary port read. */
-        if (s_5649_config & (1u << offset))
-            return io_get_input(offset < 4 ? offset : 0);
+        if (s_5649_config & (1u << offset)) {
+            /* MAME wires port C to IN1 (the triggers) and port D to IN2;
+             * port G is the SW3 dip bank, all off. Reading port C as input
+             * port 2 was what kept every CRX trigger from reaching its game. */
+            if (offset == 2 || offset == 3)
+                return io_get_input(offset - 1);
+            return 0xFF;
+        }
         return s_5649_port[offset];
 
-    /* RS-422 receive. No satellite cabinet on the other end. */
-    case 0x0B: case 0x0C:
+    /* RS-422 channel 1 receive. No satellite cabinet on the other end. */
+    case 0x0B:
         return 0xFF;
+    /* RS-422 channel 2 receive: the light-gun board on the gun games. */
+    case 0x0C:
+        return crx_gun_read();
 
     /* RS-422 status. MAME hardcodes "receive buffers full, transmit buffers
      * empty" and the games are happy with it; a real link would need more. */
@@ -292,6 +348,7 @@ void sega5649_write(uint8_t offset, uint8_t data)
             lamp_output_write(data);
         break;
     case 0x08: s_5649_config = data; break;      /* port direction */
+    case 0x0A: s_gun_mux = data; break;          /* RS-422 ch2 transmit: gun mux select */
     case 0x0E: s_5649_mode = data; break;        /* counter / RS-422 mode */
     case 0x0F: s_5649_analog_ch = (uint8_t)(data & 7); break;
     default: break;                              /* serial out, unmodelled */

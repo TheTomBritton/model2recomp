@@ -209,6 +209,13 @@ bool model2recomp_begin_frame(void)
         io_set_lightgun(0, (uint16_t)mx, (uint16_t)my, offscreen);
         io_set_input(1, in1);
     }
+    /* Space is an off-screen shot - the reload - for a gun with no second
+     * button, as on the other cabinets. */
+    if (platform_key_pressed(SDL_SCANCODE_SPACE)) {
+        in1 &= ~IN1_P1_TRIGGER;
+        io_set_lightgun(0, (uint16_t)mx, (uint16_t)my, true);
+        io_set_input(1, in1);
+    }
     if (platform_key_pressed(SDL_SCANCODE_5))     in0 &= ~IN0_COIN1;
     if (platform_key_pressed(SDL_SCANCODE_6))     in0 &= ~IN0_COIN2;
     if (platform_key_pressed(SDL_SCANCODE_9))     in0 &= ~IN0_SERVICE;
@@ -574,6 +581,13 @@ uint32_t model2recomp_field_sync(void)
                         uint32_t w = bus_read32(a);
                         fwrite(&w, 4, 1, df);
                     }
+                    fclose(df);
+                }
+                /* Program RAM: code the game copied there, to match back to ROM. */
+                snprintf(p, sizeof p, "%s.prog", dump);
+                df = fopen(p, "wb");
+                if (df) {
+                    fwrite(bus_get_program_ram(), 1, bus_get_program_ram_size(), df);
                     fclose(df);
                 }
                 /* The display list, for diffing against MAME's bufferram. */

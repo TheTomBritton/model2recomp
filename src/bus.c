@@ -94,6 +94,11 @@ void bus_shutdown(void)
     free(s_texture_rom);   s_texture_rom = NULL;
 }
 
+/* The program RAM image, for a dump: code the game copies here and calls is
+ * invisible to a static lift of the ROM, and matching it back to its ROM
+ * original starts with seeing it. */
+uint32_t bus_get_program_ram_size(void) { return s_program_ram_size; }
+
 void bus_set_vblank_callback(bus_vblank_callback_t cb)
 {
     s_vblank_cb = cb;

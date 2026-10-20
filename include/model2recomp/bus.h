@@ -85,6 +85,7 @@ void     bus_workram_write8(uint32_t offset, uint8_t val);
 void     bus_workram_write16(uint32_t offset, uint16_t val);
 void     bus_workram_write32(uint32_t offset, uint32_t val);
 uint8_t *bus_get_workram(void);
+uint32_t bus_get_program_ram_size(void);
 
 /* --- Direct Program RAM access --- */
 /* Program RAM is 128KB at 0x00200000-0x0021FFFF */

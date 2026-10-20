@@ -25,6 +25,23 @@
 #include <math.h>
 #include <string.h>
 
+/*
+ * A branch from one lifted function into another is a jump on the i960, and
+ * the lifter emits it as "M2_TAILCALL return other();" - a real tail call
+ * where the compiler has one (clang: musttail, natively and on wasm built
+ * with -mtail-call), so a loop split into fragments does not nest the host
+ * stack. Elsewhere it is an ordinary call and the big stack reserve covers
+ * it. M2_NO_TAILCALL forces the fallback.
+ */
+#if !defined(M2_NO_TAILCALL) && defined(__has_attribute)
+#  if __has_attribute(musttail)
+#    define M2_TAILCALL __attribute__((musttail))
+#  endif
+#endif
+#ifndef M2_TAILCALL
+#  define M2_TAILCALL
+#endif
+
 /* MODI: floored modulo. Unlike remi, the result takes the sign of the
  * divisor, so -7 modi 3 is 2 where -7 remi 3 is -1. Daytona indexes the
  * link ring's node slots with it. Semantics from MAME's i960 core. */
