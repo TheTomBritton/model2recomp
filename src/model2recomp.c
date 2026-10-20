@@ -417,6 +417,8 @@ uint32_t model2recomp_field_sync(void)
                               : ((videoctl_read() & 1) == 0
                                  || (s_fields_done & 1) == 0);
             if (gate) (void)0; else (void)geo_take_list_ready();
+            if (geo_take_parsed_since_field())
+                parse = false;      /* the publish already parsed this field's list */
             if (parse)
                 geo_parse();
         }

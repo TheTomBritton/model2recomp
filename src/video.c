@@ -144,6 +144,7 @@ void geo_write(uint32_t offset, uint32_t data)
         s_geo_read_addr = data & 0xFFFFF;
         s_geo_list_ready = true;
         g_geo_publishes++;
+        geo_parse_published();      /* see geometry.c: a list published between two fields is still a list */
     }
 }
 

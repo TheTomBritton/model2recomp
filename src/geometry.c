@@ -1113,6 +1113,34 @@ void geo_parse(void)
     }
 }
 
+/*
+ * A list is parsed the moment the game publishes it (writes the read start
+ * address), as well as at the field boundary.
+ *
+ * MAME parses at vblank, which arrives on the wall clock whatever the i960
+ * is doing; here a field only passes when the game polls the video status
+ * register. Virtua Cop 2 builds and publishes its texture-parameter list
+ * during boot and publishes the next list before it ever polls - so the
+ * field-boundary parse never saw the one with the lighting in it, every
+ * polygon kept a luma of zero, and the stages drew black. Parsing on publish
+ * applies every published list's state; the field parse is skipped when a
+ * publish already covered it, so no field does the work twice.
+ */
+static bool s_parsed_since_field;
+
+void geo_parse_published(void)
+{
+    geo_parse();
+    s_parsed_since_field = true;
+}
+
+bool geo_take_parsed_since_field(void)
+{
+    bool p = s_parsed_since_field;
+    s_parsed_since_field = false;
+    return p;
+}
+
 uint32_t geo_polygon_count(void)
 {
     return s_raster ? s_raster->poly_list_index : 0;

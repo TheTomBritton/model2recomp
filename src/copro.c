@@ -96,6 +96,18 @@ static bool      s_booted;
 static uint32_t s_in[FIFO_MAX], s_out[FIFO_MAX];
 static uint32_t s_in_head, s_in_tail, s_out_head, s_out_tail;
 
+/* MODEL2_COPROTRACE=N: from the first texture-parameter command (0x03000606)
+ * the i960 pushes, print N events: input pushes, output pushes, and the
+ * coprocessor's writes through its buffer-RAM window. */
+static long s_ctrace = -1;
+static bool s_ctrace_on;
+static void ctrace(const char *what, uint32_t a, uint32_t v)
+{
+    if (s_ctrace < 0) { const char *e = getenv("MODEL2_COPROTRACE"); s_ctrace = e ? atol(e) : 0; }
+    if (!s_ctrace_on && v == 0x03000606u && what[0] == 'i') s_ctrace_on = true;
+    if (s_ctrace_on && s_ctrace > 0) { s_ctrace--; fprintf(stderr, "[c%s] %08X %08X\n", what, a, v); }
+}
+
 static void fifo_push(uint32_t *f, uint32_t *head, uint32_t tail, uint32_t v)
 {
     uint32_t next = (*head + 1) % FIFO_MAX;
@@ -197,6 +209,7 @@ static uint32_t tgp_memory_r(uint32_t offset)
 static void tgp_memory_w(uint32_t offset, uint32_t data)
 {
     uint32_t adr = (s_bank_reg & 0xFF0000) | offset;
+    ctrace("mem", adr, data);
     if (adr & 0x400000)
         bus_bufferram_write32((adr & 0x7FFF) * 4, data);
 }
@@ -261,7 +274,7 @@ static void rf_write(uint32_t adr, uint32_t v)
 {
     switch (adr & 0xF) {
     case 0: break;                                       /* leds/busy */
-    case 2: fifo_push(s_out, &s_out_head, s_out_tail, v); break;
+    case 2: ctrace("out", 0, v); fifo_push(s_out, &s_out_head, s_out_tail, v); break;
     case 3:
         s_bank_reg = v;
         s_bank_on = (v & 0xC00000) != 0;
@@ -971,6 +984,7 @@ uint32_t copro_ctl_read(void)
 void copro_function_write(uint32_t offset, uint32_t data)
 {
     uint32_t a = (offset >> 2) & 0xFF;
+    ctrace("in", offset, (data & 0x800FFFFF) | (a << 23));
     fifo_push(s_in, &s_in_head, s_in_tail, (data & 0x800FFFFF) | (a << 23));
 }
 
@@ -982,6 +996,7 @@ void copro_fifo_write(uint32_t data)
         s_upload_cnt++;
         return;
     }
+    ctrace("in", 0x4000, data);
     fifo_push(s_in, &s_in_head, s_in_tail, data);
 }
 

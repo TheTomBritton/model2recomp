@@ -59,6 +59,9 @@ void geo_shutdown(void);
 /* Walk one field's command stream out of buffer RAM, producing the polygon
  * list. Called at the field boundary, as the hardware does at VBlank. */
 void geo_parse(void);
+/* Parse the list the game just published; true once per field if that happened. */
+void geo_parse_published(void);
+bool geo_take_parsed_since_field(void);
 
 /* Project and rasterize the polygon list into the 3D bitmap. */
 void geo_render_polygons(void);
