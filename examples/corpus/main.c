@@ -24,6 +24,8 @@
 #include "model2recomp/func_table.h"
 #include "game/functions.h"
 
+#include "model2recomp/eeprom.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -58,6 +60,13 @@ int main(int argc, char *argv[])
     }
 
     game_register_all();
+
+    /* The battery: a cabinet's backup RAM holds what its operator set in the
+     * test menu, and some sets cannot run their attract from a blank one
+     * (tools/corpus.py, OPERATOR). */
+    const char *backup = getenv("MODEL2_BACKUP");
+    if (backup && !eeprom_load(backup))
+        fprintf(stderr, "[corpus] no backup RAM image at %s\n", backup);
 
     const char *cap = getenv("MODEL2_MAX_FRAMES");
     model2recomp_set_frame_limit(cap ? strtol(cap, NULL, 10) : 0);

@@ -411,6 +411,64 @@ def change_fraction(a, b):
     return sum(1 for i in range(n) if abs(a[i] - b[i]) > 8) / n
 
 
+# --- what an operator sets ------------------------------------------------------
+#
+# A cabinet leaves the factory set up for one installation, and the operator
+# changes it in the test menu; the board keeps the result in battery-backed RAM.
+# A set whose factory setting cannot run alone gets, here, the battery an
+# operator would have left: the board stays title-agnostic, and the sweep
+# measures the game rather than its factory defaults.
+#
+# Daytona USA's GAME ASSIGNMENTS block (from m2-hle2, profiles/daytona.h,
+# where it was reverse-engineered): 128 bytes the boot takes from backup RAM
+# 0x01D00080 when that copy is valid (the first 8 bytes match the program
+# ROM's factory block, and the u16 at +8 is the CRC of +0x0A..+0x7F with the
+# table that follows the block), and else from the factory block. +0x0B is
+# LINK ID - 0 SINGLE, 1 MASTER, 2 SLAVE - and the factory block is MASTER: the
+# twin cabinet's, which waits for its other half on the "communication system"
+# screen forever. Where each build keeps its factory block:
+DAYTONA_FACTORY = {
+    "daytona": 0x39D60, "daytonat": 0x39D60, "daytonata": 0x39D60,
+    "daytonagtx": 0x39D60, "daytonase": 0x3AB20, "daytonas": 0x3C570,
+}
+
+
+def _daytona_single(name, rom):
+    at = DAYTONA_FACTORY.get(name)
+    if at is None or len(rom) < at + 0x280 or rom[at:at + 4] != b"SEGA":
+        return None
+    table = at + 0x80
+    block = bytearray(rom[at:at + 0x80])
+    block[0x0B] = 0                                   # LINK ID: SINGLE
+    crc = 0
+    for b in block[0x0A:0x80]:
+        i = ((crc >> 8) ^ b) & 0xFF
+        crc = ((crc << 8) ^ (rom[table + i * 2] | rom[table + i * 2 + 1] << 8)) & 0xFFFF
+    block[8], block[9] = crc & 0xFF, crc >> 8
+    sram = bytearray(b"\xff" * 0x4000)                # blank battery reads all ones
+    sram[0x80:0x100] = block
+    return bytes(sram)
+
+
+OPERATOR = {name: _daytona_single for name in DAYTONA_FACTORY}
+
+
+def operator_backup(name):
+    """Write the backup RAM an operator would leave for this set, or None."""
+    make = OPERATOR.get(name)
+    prog = os.path.join(set_dir(name), "roms", "program.bin")
+    if not make or not os.path.exists(prog):
+        return None
+    with open(prog, "rb") as f:
+        image = make(name, f.read())
+    if image is None:
+        return None
+    path = os.path.join(set_dir(name), "backup.bin")
+    with open(path, "wb") as f:
+        f.write(image)
+    return path
+
+
 def stage_run(sets, args, st):
     """Boot each set headless, sample the screen, and classify how far it got."""
     env = {
@@ -437,6 +495,9 @@ def stage_run(sets, args, st):
         shutil.rmtree(shots, ignore_errors=True)
         os.makedirs(shots, exist_ok=True)
         e = dict(env, MODEL2_SCREENSHOT=os.path.join(shots, "f"))
+        backup = operator_backup(name)
+        if backup:
+            e["MODEL2_BACKUP"] = backup
         t0 = time.time()
         code, log = run([exe, roms, rec.get("desc", name),
                          str(BOARD_ARG.get(rec.get("board"), 0))],
