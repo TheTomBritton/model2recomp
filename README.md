@@ -24,13 +24,15 @@ geometry engine, rasterizer, coprocessor and I/O board all come from the board,
 not the title. *Virtua Cop* (1994) is the reference game it was built against,
 so the screenshots and some examples are its.
 
-### Recent Changes
+## Status
 
-**Current version: v0.3.0 — _"Real Silicon"_ (September 2026).**
-See the [Changelog](#changelog) for what landed and when.
+**Alpha.** No version has been tagged yet: the v0.1 to v0.3 milestones in the
+[Changelog](#changelog) are untagged, and [CHANGELOG.md](CHANGELOG.md) tracks
+what has landed since. Virtua Cop boots, plays and draws, but its 3D is still
+visibly wrong in places.
 
 **Thirty-five Model 2 ROM sets now go through this library end to end.** All of
-them lift, compile and boot; ten draw; five run their attract sequence. See
+them lift, compile and boot; eleven draw; six run their attract sequence. See
 [The Corpus Sweep](#the-corpus-sweep).
 
 ![Virtua Cop attract mode](docs/vcop_attract.png)
@@ -40,6 +42,37 @@ list: the geometry engine walks the command stream the recompiled i960 pushed
 into buffer RAM, the rasterizer textures and z-sorts it, and the System 24
 tilemap engine puts the HUD on top. The matrices behind it were computed by the
 emulated MB86233 coprocessor running the game's own uploaded microcode.*
+
+## Getting Started
+
+This repo builds a library and its tests; a playable game comes from a port
+that links it (for example [virtuacop](https://github.com/sp00nznet/virtuacop)).
+To build and check the library from a clean machine:
+
+1. **Install the tools.**
+   - Windows: Visual Studio 2022 with *Desktop development with C++*, CMake
+     3.20 or newer, Git, and [vcpkg](https://github.com/microsoft/vcpkg)
+     (cloned to `C:cpkg` and bootstrapped). Then
+     `C:cpkgcpkg install sdl2:x64-windows`.
+   - Linux: `sudo apt install build-essential cmake git libsdl2-dev`.
+2. **Clone:** `git clone https://github.com/sp00nznet/model2recomp.git` and
+   `cd model2recomp`.
+3. **Configure and build.**
+   - Windows: `cmake -B build -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows`
+     then `cmake --build build --config Release`.
+   - Linux: `cmake -B build` then `cmake --build build -j`.
+4. **Run the tests:** `ctest --test-dir build -C Release`. Expected:
+
+   ```
+   100% tests passed, 0 tests failed out of 3
+   ```
+
+   They need no ROMs. If CMake stops at `find_package(SDL2)`, the toolchain
+   file is missing or SDL2 isn't installed for that triplet.
+
+To lift and run a game of your own, follow
+**[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)**. You supply your own
+ROM dump; none is distributed here, and neither is any code generated from one.
 
 ---
 
@@ -126,9 +159,9 @@ MAME's behaviour where it was ported from it.
 
 The rasterizer draws textured, perspective-correct, z-sorted polygons through
 the hardware's real colour path — palette entry to one of 32 ramps per channel
-in colour-translate RAM, indexed by luma, then gamma. What MAME does and this
-does not: bilinear filtering, mipmaps and microtexture blending. Texels are
-point sampled. See
+in colour-translate RAM, indexed by luma, then gamma. Texels are filtered as
+MAME filters them: bilinear, with mipmaps, trilinear blending between levels,
+and the microtexture below level 0. See
 [docs/technical/graphics-pipeline.md](docs/technical/graphics-pipeline.md).
 
 ## The Two TGPs
@@ -295,7 +328,7 @@ exactly **three** titles on it. That is the whole shortlist:
 | Game | Year | Where it is |
 |---|---|---|
 | **Virtua Cop** | 1994 | The reference title — this library was built against it. Renders attract mode. |
-| **Daytona USA** | 1993 | Boots, draws, takes a credit; stops on a coprocessor handshake before the 3D. |
+| **Daytona USA** | 1993 | Boots and reaches the AM2 logo of its attract with a single-cabinet backup RAM, then holds, polling the drive board and the sound UART. |
 | **Desert Tank** | 1994 | Boots and renders its attract sequence on the generic launcher, with no title-specific code at all. |
 
 Everything else is a CRX board, and the memory map is now variant-aware: 256 KB
@@ -324,7 +357,7 @@ per title, from "do we have the ROM" through to "does it reach attract mode".
 ### Where the corpus has got to
 
 Thirty-five sets on hand. **All thirty-five** extract, lift to C, compile and
-boot. **Ten** put a picture on screen; **five** are running their attract
+boot. **Eleven** put a picture on screen; **six** are running their attract
 sequence.
 
 | | | |
@@ -412,10 +445,6 @@ The gaps are well defined, and none of them need permission to start:
 - **The I/O board EEPROM.** Buttons work; the 93C46 holding coinage and game
   settings does not exist. Virtua Cop defaults to free play without it, which
   is convenient and not correct.
-- **Rasterizer fidelity.** Bilinear filtering, mipmaps and microtexture
-  blending are all in MAME's `model2rd.ipp` and absent here.
-- **The coprocessor data ROM.** Two lines and a load hook, but untestable
-  until a title that uses it is ported — Daytona USA is the one.
 - **Board variants.** 2A-CRX is a memory-map and I/O-chip job on the same
   coprocessor. 2B-CRX (ADSP-21062 SHARC) and 2C-CRX (MB86235) are new DSP
   cores.
@@ -442,7 +471,7 @@ cmake --build build --config Release
 ./build/Release/model2recomp_test_eeprom93c46
 ```
 
-Both are self-checking: each prints one line per check and exits non-zero if
+Or `ctest --test-dir build -C Release`. All three are self-checking: each prints one line per check and exits non-zero if
 any fail. They cover tilemap pixel order, transparency, scrolling and pass
 selection; and, for the geometry engine, projection position, culling behind
 the eye, and depth sorting. They do not need ROMs.
@@ -500,6 +529,11 @@ library is a port of that work into a different shape, not a rediscovery of it.
 Farfetch'd** and **Dirk Best** wrote the code it is derived from.
 
 Built with [Claude Code](https://claude.ai) (Anthropic).
+
+## Contributors
+
+model2recomp is built by more than one person. See
+**[CONTRIBUTORS.md](CONTRIBUTORS.md)** for who did what. Thank you, all of you.
 
 ## Changelog
 

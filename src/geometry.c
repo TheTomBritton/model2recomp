@@ -1352,11 +1352,10 @@ static uint32_t fetch_texel_bilinear(const shading_t *sh, int32_t miplevel,
 /*
  * Flat or textured triangle fill.
  *
- * ponytail: point sampling, no bilinear filter, no mipmaps and no
- * microtexture. Texture coordinates are perspective correct - u/z, v/z and 1/z
- * interpolate linearly in screen space, which is what the geometry stage
- * already prepared them for - so the mapping itself is right; what is missing
- * is only the filtering MAME applies on top.
+ * Texture coordinates are perspective correct - u/z, v/z and 1/z interpolate
+ * linearly in screen space, which is what the geometry stage already prepared
+ * them for. Texels go through fetch_texel_bilinear, with mipmaps, trilinear
+ * blending and the microtexture as MAME does.
  */
 static void fill_triangle(const vertex_t *a, const vertex_t *b, const vertex_t *c,
                           const shading_t *sh, const int16_t *viewport)

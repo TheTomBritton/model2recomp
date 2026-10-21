@@ -25,7 +25,8 @@ produces the reference frames.
 
 - **Performance.** Roughly 22% of real speed with Virtua Cop. Correctness
   first — optimising a renderer that draws the wrong picture is wasted work.
-- **Linux and macOS.** SDL throughout, nothing known to block it, nothing tried.
+- **macOS.** SDL throughout, nothing known to block it, nothing tried. Linux
+  builds, runs the corpus (#1) and is covered by CI.
 
 ## Out of scope
 
