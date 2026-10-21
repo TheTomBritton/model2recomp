@@ -185,7 +185,7 @@ static inline uint32_t op_shrdi(uint32_t count, uint32_t src)
 static inline uint32_t op_rotate(uint32_t count, uint32_t src)
 {
     count &= 31;
-    return (src << count) | (src >> (32 - count));
+    return count ? (src << count) | (src >> (32 - count)) : src;
 }
 
 /* ---- Compare ---- */
@@ -343,7 +343,8 @@ static inline void op_chkbit(uint32_t bitnum, uint32_t src)
     if (src & (1u << (bitnum & 31)))
         I960_CC_SET(I960_AC_CC_EQ); /* bit set = "equal" condition */
     else
-        I960_CC_SET(I960_AC_CC_LT); /* bit clear = "less" condition */
+        I960_CC_SET(I960_AC_CC_UN); /* bit clear = 000 (MAME i960.cpp; m2-hle2
+                                     * i960.md: LT inverts chkbit + bno/bo) */
 }
 
 /* ---- Move ---- */

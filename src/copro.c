@@ -771,7 +771,7 @@ static void copro_execute(int cycles)
 
         case 0x0E:      /* lipl / lia / lib / lid */
             switch ((opcode >> 24) & 0x3) {
-            case 0: s_p = opcode & 0xFFFFFF; break;
+            case 0: s_p = (s_p & 0xFF000000u) | (opcode & 0xFFFFFFu); break; /* lipl: low 24 bits only */
             case 1: s_a = (uint32_t)sext(opcode, 24); break;
             case 2: s_b = (uint32_t)sext(opcode, 24); break;
             case 3: s_d = (uint32_t)sext(opcode, 24); break;

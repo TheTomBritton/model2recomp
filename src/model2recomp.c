@@ -357,8 +357,6 @@ void model2recomp_save_ppm(const char *path)
 
 /* --- Video field sync (see model2recomp.h) --- */
 
-#define VIDEOCTL_FIELD 0x4   /* bit 2 of 0x0098000C toggles each field */
-
 static long s_frame_limit = 0;
 
 void model2recomp_set_frame_limit(long fields)
@@ -613,7 +611,7 @@ uint32_t model2recomp_field_sync(void)
             exit(0);
         }
 
-        videoctl_write(videoctl_read() ^ VIDEOCTL_FIELD);
+        videoctl_field_advance();
         s_in_field = false;
     }
 

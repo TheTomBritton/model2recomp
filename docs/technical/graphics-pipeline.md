@@ -88,6 +88,22 @@ For each polygon in an object:
 
 Then the whole list is walked back to front, bucket by bucket.
 
+### Strips: the link type
+
+Polygons in an object share corners. Bits 8-9 of each polygon's attribute
+word say which corners of the last polygon the next one keeps, so a strip
+sends only the new ones:
+
+| Link | Kept for the next polygon |
+|---|---|
+| `0`, `2` | Its last two corners become the next one's first two |
+| `1` | Its third corner becomes the next one's second; the first stays |
+| `3` | Its fourth corner becomes the next one's first: a new strip on the old corner |
+
+The geometrizer and the rasterizer both have to carry the same corners.
+Getting one case wrong does not lose a polygon; it draws it from a stale
+corner, which shows as a long smear or a wedge across the screen.
+
 ## Rasterizing
 
 `geo_render_polygons()` projects each polygon and fills it. Projection is
@@ -226,4 +242,10 @@ never touched that pixel, so the tilemap below shows through.
 
 The CRTC origin moves with the horizontal and vertical sync registers
 (`0x01040000`, `0x01060000`), and both the rasterizer's viewport clipping and
-the tilemap draw honour it.
+the tilemap draw honour it. The game can write those registers as 32-bit
+words or as halves, directly or through the System 24 mirror at `+0x100000`; all reach
+them.
+
+The window's right and bottom edges are inclusive: a window from 0 to 495
+covers 496 pixels. An empty window draws nothing; it does not fall back to
+the full screen.

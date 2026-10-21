@@ -85,6 +85,20 @@ def set_dir(setname):
     return os.path.join(CORPUS, setname)
 
 
+# The lifted programs recurse deeply (CMakeLists.txt reserves 256 MB of stack
+# on MSVC). Elsewhere the main thread's stack is the soft RLIMIT_STACK at exec
+# time, usually 8 MB, which a lifted set exhausts in a few thousand frames.
+STACK_BYTES = 256 << 20
+
+
+def _big_stack():
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
+    want = STACK_BYTES if hard == resource.RLIM_INFINITY else min(STACK_BYTES, hard)
+    if soft != resource.RLIM_INFINITY and soft < want:
+        resource.setrlimit(resource.RLIMIT_STACK, (want, hard))
+
+
 def run(cmd, timeout, cwd=None, env=None, log=None):
     """Run a command, capture everything, never hang the sweep.
 
@@ -106,7 +120,8 @@ def run(cmd, timeout, cwd=None, env=None, log=None):
     with open(path, "wb") as f:
         try:
             p = subprocess.Popen(cmd, cwd=cwd, env=e, stdout=f,
-                                 stderr=subprocess.STDOUT)
+                                 stderr=subprocess.STDOUT,
+                                 preexec_fn=_big_stack if os.name != "nt" else None)
         except OSError as ex:
             return -1, str(ex)
         try:
@@ -307,7 +322,10 @@ def stage_build(sets, args, st):
         # the build that tripped over it, so reconfigure and try once more.
         # Discovery rolling a set back is exactly when this happens, and it
         # cost Desert Tank its attract mode for a whole sweep.
-        if "C1083" in log:
+        # A set lifted after the last configure has no target yet either:
+        # the corpus is globbed at configure time.
+        if ("C1083" in log or "No rule to make target" in log
+                or "unknown target" in log or "MSB1009" in log):
             run(["cmake", "-S", ROOT, "-B", BUILD], timeout=600)
             code, log = run(cmd, timeout=args.build_timeout)
 
@@ -393,6 +411,64 @@ def change_fraction(a, b):
     return sum(1 for i in range(n) if abs(a[i] - b[i]) > 8) / n
 
 
+# --- what an operator sets ------------------------------------------------------
+#
+# A cabinet leaves the factory set up for one installation, and the operator
+# changes it in the test menu; the board keeps the result in battery-backed RAM.
+# A set whose factory setting cannot run alone gets, here, the battery an
+# operator would have left: the board stays title-agnostic, and the sweep
+# measures the game rather than its factory defaults.
+#
+# Daytona USA's GAME ASSIGNMENTS block (from m2-hle2, profiles/daytona.h,
+# where it was reverse-engineered): 128 bytes the boot takes from backup RAM
+# 0x01D00080 when that copy is valid (the first 8 bytes match the program
+# ROM's factory block, and the u16 at +8 is the CRC of +0x0A..+0x7F with the
+# table that follows the block), and else from the factory block. +0x0B is
+# LINK ID - 0 SINGLE, 1 MASTER, 2 SLAVE - and the factory block is MASTER: the
+# twin cabinet's, which waits for its other half on the "communication system"
+# screen forever. Where each build keeps its factory block:
+DAYTONA_FACTORY = {
+    "daytona": 0x39D60, "daytonat": 0x39D60, "daytonata": 0x39D60,
+    "daytonagtx": 0x39D60, "daytonase": 0x3AB20, "daytonas": 0x3C570,
+}
+
+
+def _daytona_single(name, rom):
+    at = DAYTONA_FACTORY.get(name)
+    if at is None or len(rom) < at + 0x280 or rom[at:at + 4] != b"SEGA":
+        return None
+    table = at + 0x80
+    block = bytearray(rom[at:at + 0x80])
+    block[0x0B] = 0                                   # LINK ID: SINGLE
+    crc = 0
+    for b in block[0x0A:0x80]:
+        i = ((crc >> 8) ^ b) & 0xFF
+        crc = ((crc << 8) ^ (rom[table + i * 2] | rom[table + i * 2 + 1] << 8)) & 0xFFFF
+    block[8], block[9] = crc & 0xFF, crc >> 8
+    sram = bytearray(b"\xff" * 0x4000)                # blank battery reads all ones
+    sram[0x80:0x100] = block
+    return bytes(sram)
+
+
+OPERATOR = {name: _daytona_single for name in DAYTONA_FACTORY}
+
+
+def operator_backup(name):
+    """Write the backup RAM an operator would leave for this set, or None."""
+    make = OPERATOR.get(name)
+    prog = os.path.join(set_dir(name), "roms", "program.bin")
+    if not make or not os.path.exists(prog):
+        return None
+    with open(prog, "rb") as f:
+        image = make(name, f.read())
+    if image is None:
+        return None
+    path = os.path.join(set_dir(name), "backup.bin")
+    with open(path, "wb") as f:
+        f.write(image)
+    return path
+
+
 def stage_run(sets, args, st):
     """Boot each set headless, sample the screen, and classify how far it got."""
     env = {
@@ -419,6 +495,9 @@ def stage_run(sets, args, st):
         shutil.rmtree(shots, ignore_errors=True)
         os.makedirs(shots, exist_ok=True)
         e = dict(env, MODEL2_SCREENSHOT=os.path.join(shots, "f"))
+        backup = operator_backup(name)
+        if backup:
+            e["MODEL2_BACKUP"] = backup
         t0 = time.time()
         code, log = run([exe, roms, rec.get("desc", name),
                          str(BOARD_ARG.get(rec.get("board"), 0))],
@@ -509,8 +588,8 @@ LEGEND = [
 # than guessed. A row with no entry here has not been diagnosed - that is the
 # work queue, and it is deliberately short because each line cost a trace.
 BLOCKER = {
-    "daytona":  "Coprocessor handshake: the game submits a TGP job and spins "
-                "on a result that never arrives.",
+    "daytona":  "Reaches the AM2 logo with a single-cabinet backup, then "
+                "holds, polling the drive board's DPRAM and the sound UART.",
 
     "von":      "Colour ramps only partly written - 2 of 32 per channel.",
     "vstriker": "Sound board. Sits on \"SOUND initialize...\", writes the "

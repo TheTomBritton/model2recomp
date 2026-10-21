@@ -126,12 +126,10 @@ Sixteen entries, of which four are wired to the board:
 The external window reaches buffer RAM at `adr & 0x400000`, and the copro data
 ROM socket at `adr & 0x800000`.
 
-**That socket is not implemented.** `tgp_memory_r()` returns 0 for it, which is
-correct on Virtua Cop — its `copro_data` region is declared and empty — and
-wrong on any title that fills it. Daytona USA puts 4 MB of collision and
-height-map data there. Wiring it up is a ROM region, a load hook and two lines;
-it is left undone because nothing in the project can currently test it. See
-[porting-targets.md](porting-targets.md).
+`tgp_memory_r()` serves that socket from the `copro_data` region, masked to
+the region size in dwords, so a partly filled socket wraps as it does in MAME.
+Virtua Cop's is declared and empty; Daytona USA puts 4 MB of collision and
+height-map data there. See [porting-targets.md](porting-targets.md).
 
 ## Scheduling: how a DSP runs without a scheduler
 

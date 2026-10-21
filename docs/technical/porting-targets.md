@@ -52,27 +52,16 @@ The obvious next port, and the one worth doing first.
 | Sound board | Model 1 sound board (68000 + MultiPCM), stubbed either way |
 | Blocker | **One.** See below. |
 
-**The one blocker: the coprocessor data ROM.** Virtua Cop's `copro_data`
-region is declared and empty. Daytona's holds **4 MB** (`mpr-16536`,
-`mpr-16537`) — collision meshes, height maps and similar, which the MB86233
-reads through its banked external window at `adr & 0x800000`. `tgp_memory_r()`
-in `src/copro.c` currently returns 0 for that case, because on the reference
-title there is nothing there:
+**The coprocessor data ROM.** Virtua Cop's `copro_data` region is declared
+and empty. Daytona's holds **4 MB** (`mpr-16536`, `mpr-16537`) — collision
+meshes, height maps and similar, which the MB86233 reads through its banked
+external window at `adr & 0x800000`. `tgp_memory_r()` in `src/copro.c` serves
+it from the loaded region, masked to the region size in dwords as MAME does.
 
-```c
-static uint32_t tgp_memory_r(uint32_t offset)
-{
-    uint32_t adr = (s_bank_reg & 0xFF0000) | offset;
-    if (adr & 0x800000) return 0;                 /* <- copro data ROM, unimplemented */
-    if (adr & 0x400000) return bus_bufferram_read32((adr & 0x7FFF) * 4);
-    return 0;
-}
-```
-
-Wiring it up is a ROM region, a load hook and two lines here — MAME masks the
-address to the region size in dwords and indexes it. What makes it worth doing
-on a real target rather than speculatively is that nothing currently in the
-project can test it.
+**The link board.** A factory-fresh backup RAM has the cabinet set to link
+mode, and the game then waits on the communication board for good. The corpus
+run gives Daytona the backup an operator leaves on a single cabinet (link off,
+checksum recomputed) through `MODEL2_BACKUP`; see `tools/corpus.py`.
 
 Two smaller things a Daytona loader has to get right:
 

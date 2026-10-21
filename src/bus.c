@@ -32,6 +32,23 @@ static uint32_t s_program_ram_size = 0x20000;
 #define PROGRAM_RAM_TOP (0x00200000u + s_program_ram_size)
 static model2_variant_t s_variant = MODEL2_ORIGINAL;
 static bool is_crx(void) { return s_variant != MODEL2_ORIGINAL; }
+
+/*
+ * The System 24 block decodes fewer address lines than it spans: everything
+ * at 0x01000000-0x010FFFFF repeats at +0x100000, and tile RAM repeats at
+ * +0x10000 as well (MAME model2.cpp: tile RAM .mirror(0x110000), the sync
+ * registers, ABSEL and char RAM .mirror(0x100000)). Fold a mirror onto the
+ * address the handlers below decode.
+ */
+static inline uint32_t s24_unmirror(uint32_t addr)
+{
+    if ((addr & 0xFFE00000u) != 0x01000000u)
+        return addr;
+    addr &= ~0x100000u;
+    if ((addr & 0xFFFF0000u) == 0x01010000u)
+        addr -= 0x10000;
+    return addr;
+}
 static uint8_t *s_workram = NULL;       /* 0x00500000, 1MB */
 static uint8_t *s_bufferram = NULL;     /* 0x00900000, 128KB */
 static uint8_t *s_cpu_control = NULL;   /* 0x00E00000, 56 bytes */
@@ -40,7 +57,7 @@ static uint8_t *s_char_ram = NULL;      /* 0x01080000, 512KB */
 static uint8_t *s_backup_sram = NULL;   /* 0x01D00000, 16KB */
 static uint8_t *s_data_rom = NULL;      /* 0x02000000, up to 32MB */
 static uint32_t s_data_rom_size = 0;
-static uint8_t *s_extra_data = NULL;    /* 0x06000000, up to 16MB */
+static uint8_t *s_extra_data = NULL;    /* polygon ROM, geometrizer only */
 static uint32_t s_extra_data_size = 0;
 
 /* Texture ROM: not in the i960 address space at all - only the rasterizer
@@ -438,6 +455,7 @@ uint32_t bus_read32(uint32_t addr)
 
     if (addr >= 0x00800000 && addr < 0x02000000)
         hotread_note(addr);
+    addr = s24_unmirror(addr);
 
     /* Program ROM: 0x00000000-0x001FFFFF */
     if (addr < 0x00200000) {
@@ -606,11 +624,13 @@ uint32_t bus_read32(uint32_t addr)
         return 0;
     }
 
-    /* Extra data: 0x06000000-0x06FFFFFF */
+    /* "Extra" data: 0x06000000-0x06FFFFFF is the data ROM's upper 16MB
+     * again (MAME model2.cpp: region main_data at 0x1000000). The polygon
+     * ROM is the geometrizer's alone and not on the i960's bus. */
     if (addr >= 0x06000000 && addr < 0x07000000) {
-        uint32_t off = addr - 0x06000000;
-        if (s_extra_data && off < s_extra_data_size)
-            return mem_read32(s_extra_data, off);
+        uint32_t off = addr - 0x06000000 + 0x1000000;
+        if (s_data_rom && off < s_data_rom_size)
+            return mem_read32(s_data_rom, off);
         return 0;
     }
 
@@ -884,6 +904,12 @@ void bus_write32(uint32_t addr, uint32_t val)
         return;
     }
 
+    addr = s24_unmirror(addr);
+
+    /* Sync registers: a word store reaches the 16-bit register too. */
+    if (addr == 0x01040000) { tile_xhout_write((uint16_t)val); return; }
+    if (addr == 0x01060000) { tile_xvout_write((uint16_t)val); return; }
+
     /* System 24 tile RAM: 0x01000000-0x0100FFFF */
     if (addr >= 0x01000000 && addr < 0x01010000) {
         uint32_t off = (addr - 0x01000000) >> 1;
@@ -1029,6 +1055,22 @@ void bus_write32(uint32_t addr, uint32_t val)
     /* printf("[bus] Unmapped write32: 0x%08X = 0x%08X\n", addr, val); */
 }
 
+/*
+ * A halfword or byte store to the TGP ports pushes its lane with zeros
+ * around it, as MAME's 32-bit handler and m2-hle2 (model2a.h) do. The
+ * read-modify-write the other regions get would pop a pending reply off the
+ * output FIFO and push it back OR'd into the command.
+ */
+static bool copro_narrow_write(uint32_t addr, uint32_t lane_val)
+{
+    if (addr < 0x00880000 || addr >= 0x00888000)
+        return false;
+    uint32_t a = addr & ~3u;
+    if (a < 0x00884000) copro_function_write((a - 0x00880000) >> 2, lane_val);
+    else                copro_fifo_write(lane_val);
+    return true;
+}
+
 void bus_write16(uint32_t addr, uint16_t val)
 {
     addr &= ~1;
@@ -1043,6 +1085,8 @@ void bus_write16(uint32_t addr, uint16_t val)
         mem_write16(s_program_ram, addr - 0x00200000, val);
         return;
     }
+
+    addr = s24_unmirror(addr);
 
     /* Tile sync registers */
     if (addr >= 0x01040000 && addr < 0x01040002) {
@@ -1062,6 +1106,9 @@ void bus_write16(uint32_t addr, uint16_t val)
             return;
         }
     }
+
+    if (copro_narrow_write(addr, (uint32_t)val << ((addr & 2) * 8)))
+        return;
 
     /* For other regions, do read-modify-write through 32-bit */
     uint32_t aligned = addr & ~3;
@@ -1092,6 +1139,9 @@ void bus_write8(uint32_t addr, uint8_t val)
             return;
         }
     }
+
+    if (copro_narrow_write(addr, (uint32_t)val << ((addr & 3) * 8)))
+        return;
 
     /* For other regions, do read-modify-write through 32-bit */
     uint32_t aligned = addr & ~3;
@@ -1161,7 +1211,7 @@ void bus_load_extra_data(const uint8_t *data, uint32_t size)
     free(s_extra_data);
     s_extra_data = rom_dup(data, size);
     s_extra_data_size = s_extra_data ? size : 0;
-    printf("[bus] Extra data loaded: %u bytes @ 0x06000000\n", s_extra_data_size);
+    printf("[bus] Polygon ROM loaded: %u bytes\n", s_extra_data_size);
 }
 
 void bus_load_texture_rom(const uint8_t *data, uint32_t size)
@@ -1178,7 +1228,7 @@ const uint16_t *bus_get_texture_rom(uint32_t *words_out)
     return (const uint16_t *)s_texture_rom;
 }
 
-/* Polygon ROM is the same image the i960 sees at 0x06000000. */
+/* The polygon ROM, which only the geometrizer reads. */
 const uint32_t *bus_get_polygon_rom(uint32_t *words_out)
 {
     if (words_out) *words_out = s_extra_data_size / 4;

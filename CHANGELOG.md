@@ -43,6 +43,23 @@ tagging. Everything below is unreleased.
 - Stale display lists were re-rendered after the guest had moved on.
 - A guest frame leak that presented as an interrupt-frame problem.
 - Every interrupt line is serviced, including the sound interrupt.
+- Link type 3 now carries the anchor corner to the next polygon. It carried
+  none, so Virtua Cop's gate smeared and a blue wedge crossed the screen.
+- The window's right and bottom edges are inclusive, and an empty window
+  draws nothing instead of the whole screen.
+- The System 24 mirrors at `+0x100000`, and word stores to the sync
+  registers, reach the hardware they mirror.
+- Byte and halfword stores to the coprocessor are pushed as whole words, as
+  on the board, instead of being merged into a stale word first.
+- `lipl` keeps the top byte of P; `tgpid` returns the chip's ID string.
+- Idle timers read `0xFFFFF`, not 0, and `chkbit` sets the condition code to
+  000 when the bit is clear. Virtua Fighter 2 reaches its attract mode.
+- `0x06000000` is the upper half of data ROM, not the polygon ROM.
+- Bit 2 of `0x0098000C` is the board's frame counter at the game's render
+  rate; a store to the register no longer moves it.
+- The corpus builds and runs on Linux, and gives Daytona USA the
+  single-cabinet backup RAM an operator leaves, so it gets past the link
+  screen.
 
 ### Known issues
 

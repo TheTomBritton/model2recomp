@@ -20,7 +20,12 @@ static uint32_t s_irq_enable = 0;
 
 void timer_init(void)
 {
-    memset(s_timer_vals, 0, sizeof(s_timer_vals));
+    /* An idle timer reads 0xFFFFF, not 0 (MAME machine_reset; m2-hle2
+     * IRQT_IDLE). VF2's rand (0x94D0) mixes the four counts into its state,
+     * and with all four at 0 it returns one value forever: the retry loop
+     * at 0x542C8 never leaves and the game never draws. */
+    for (int i = 0; i < 4; i++)
+        s_timer_vals[i] = 0xFFFFF;
     memset(s_timer_orig, 0, sizeof(s_timer_orig));
     memset(s_timer_running, 0, sizeof(s_timer_running));
     s_irq_request = 0;

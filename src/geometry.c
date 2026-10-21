@@ -436,7 +436,10 @@ static void model2_3d_process_polygon(uint32_t attr, int num_verts)
             for (uint32_t i = 0; i < 3; i++)
                 raster->command_buffer[5 + i] = raster->command_buffer[11 + i];
             break;
-        default:
+        case 3:
+            /* A new strip anchored on the previous corner: P1(n) -> P0. */
+            for (uint32_t i = 0; i < 3; i++)
+                raster->command_buffer[2 + i] = raster->command_buffer[14 + i];
             break;
     }
 }
@@ -1370,9 +1373,11 @@ static void fill_triangle(const vertex_t *a, const vertex_t *b, const vertex_t *
     int xoff, yoff;
     video_get_crtc_offsets(&xoff, &yoff);
 
-    int vx0 = viewport[0] + xoff, vx1 = viewport[2] + xoff;
-    int vy0 = (384 - viewport[3]) + yoff, vy1 = (384 - viewport[1]) + yoff;
-    if (vx1 <= vx0 || vy1 <= vy0) { vx0 = 0; vy0 = 0; vx1 = FB_WIDTH; vy1 = FB_HEIGHT; }
+    /* The window's corners are inclusive (MAME: rectangle(min, max)); the
+     * bounds here are exclusive, so one past. A window with nothing in it
+     * draws nothing. */
+    int vx0 = viewport[0] + xoff, vx1 = viewport[2] + xoff + 1;
+    int vy0 = (384 - viewport[3]) + yoff, vy1 = (384 - viewport[1]) + yoff + 1;
 
     if (min_x < vx0) min_x = vx0;
     if (min_y < vy0) min_y = vy0;

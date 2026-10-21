@@ -13,9 +13,10 @@ produces the reference frames.
 
 - **Sound.** A 68000 and a SCSP. Nothing is implemented; the sound interrupt is
   raised and then ignored.
-- **The coprocessor data socket.** Virtua Cop leaves it empty, so the copro
-  address decode currently returns 0 for anything with bit 23 set. Daytona USA
-  populates it with 4MB, and that assumption will be wrong there.
+- **Daytona USA past its attract logo.** With the single-cabinet backup the
+  corpus run writes, it reaches the AM2 logo and holds there, polling the
+  drive board's DPRAM and the sound UART. The coprocessor data socket it
+  needs is wired up.
 - **Model 2A/2B/2C.** Only the original board is modelled. The later revisions
   change the coprocessor and the rasterizer; `docs/` has the survey of what
   differs.
