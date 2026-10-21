@@ -588,8 +588,8 @@ LEGEND = [
 # than guessed. A row with no entry here has not been diagnosed - that is the
 # work queue, and it is deliberately short because each line cost a trace.
 BLOCKER = {
-    "daytona":  "Coprocessor handshake: the game submits a TGP job and spins "
-                "on a result that never arrives.",
+    "daytona":  "Reaches the AM2 logo with a single-cabinet backup, then "
+                "holds, polling the drive board's DPRAM and the sound UART.",
 
     "von":      "Colour ramps only partly written - 2 of 32 per channel.",
     "vstriker": "Sound board. Sits on \"SOUND initialize...\", writes the "

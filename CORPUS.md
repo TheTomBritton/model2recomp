@@ -17,8 +17,8 @@ records what happened on a machine that had the sets.
 | Program lifts to C | **35** |
 | That C builds | **35** |
 | Boots | **35** |
-| Draws something | **10** |
-| Reaches attract (still changing at the last sample) | **5** |
+| Draws something | **11** |
+| Reaches attract (still changing at the last sample) | **6** |
 | Blocked on a Sega crypto device regardless of the board | **5** |
 
 Read the board heading before the result. The memory map is now variant-aware, so the CRX boards get their own program RAM, I/O chip and texture windows - but 2B and 2C still have no math coprocessor, and without one no polygon can be transformed. A CRX title that draws only tilemaps and text is at the ceiling of what this library can currently give it, not failing. See [porting-targets.md](docs/technical/porting-targets.md).
@@ -40,7 +40,7 @@ The original 1993 board — the one this library implements. These results are t
 
 | Set | Game | Year | ROM | Extract | Lifts | Builds | Boots | Renders | Motion | Furthest | Funcs | Hints | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `daytona` | Daytona USA (Revision A) | 1994 | yes | ok | ok | ok | yes | yes | frozen | STATIC | 1657 | 0 | Coprocessor handshake: the game submits a TGP job and spins on a result that never arrives. |
+| `daytona` | Daytona USA (Revision A) | 1994 | yes | ok | ok | ok | yes | yes | frozen | STATIC | 1657 | 0 | Reaches the AM2 logo with a single-cabinet backup, then holds, polling the drive board's DPRAM and the sound UART. |
 | `desert` | Desert Tank | 1994 | yes | ok | ok | ok | yes | yes | advancing | ATTRACT | 1387 | 0 | MAME cannot run this set either. |
 | `vcop` | Virtua Cop (Revision B) | 1994 | yes | ok | ok | ok | yes | yes | advancing | ATTRACT | 2300 | 0 |  |
 
@@ -50,7 +50,7 @@ Same MB86233 coprocessor, same geometry engine and rasterizer; a different I/O c
 
 | Set | Game | Year | ROM | Extract | Lifts | Builds | Boots | Renders | Motion | Furthest | Funcs | Hints | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `vf2` | Virtua Fighter 2 (Version 2.1) | 1994 | yes | ok | ok | ok | yes | no | blank | BOOTS-BLANK | 6227 | 1 |  |
+| `vf2` | Virtua Fighter 2 (Version 2.1) | 1994 | yes | ok | ok | ok | yes | yes | advancing | ATTRACT | 6227 | 1 |  |
 | `manxtt` | Manx TT Superbike - DX/Twin (Revision D) | 1995 | yes | ok | ok | ok | yes | yes | frozen | STATIC | 2349 | 2 | MAME cannot run this set either. |
 | `skytargt` | Sky Target | 1995 | yes | ok | ok | ok | yes | no | blank | BOOTS-BLANK | 3597 | 0 | MAME cannot run this set either. |
 | `srallyc` | Sega Rally Championship - Twin/DX (Revision C) | 1995 | yes | ok | ok | ok | yes | no | blank | NO-FRAMES | 14262 | 1 | MAME cannot run this set either. Never reaches the first sample field. |
