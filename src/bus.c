@@ -32,6 +32,23 @@ static uint32_t s_program_ram_size = 0x20000;
 #define PROGRAM_RAM_TOP (0x00200000u + s_program_ram_size)
 static model2_variant_t s_variant = MODEL2_ORIGINAL;
 static bool is_crx(void) { return s_variant != MODEL2_ORIGINAL; }
+
+/*
+ * The System 24 block decodes fewer address lines than it spans: everything
+ * at 0x01000000-0x010FFFFF repeats at +0x100000, and tile RAM repeats at
+ * +0x10000 as well (MAME model2.cpp: tile RAM .mirror(0x110000), the sync
+ * registers, ABSEL and char RAM .mirror(0x100000)). Fold a mirror onto the
+ * address the handlers below decode.
+ */
+static inline uint32_t s24_unmirror(uint32_t addr)
+{
+    if ((addr & 0xFFE00000u) != 0x01000000u)
+        return addr;
+    addr &= ~0x100000u;
+    if ((addr & 0xFFFF0000u) == 0x01010000u)
+        addr -= 0x10000;
+    return addr;
+}
 static uint8_t *s_workram = NULL;       /* 0x00500000, 1MB */
 static uint8_t *s_bufferram = NULL;     /* 0x00900000, 128KB */
 static uint8_t *s_cpu_control = NULL;   /* 0x00E00000, 56 bytes */
@@ -438,6 +455,7 @@ uint32_t bus_read32(uint32_t addr)
 
     if (addr >= 0x00800000 && addr < 0x02000000)
         hotread_note(addr);
+    addr = s24_unmirror(addr);
 
     /* Program ROM: 0x00000000-0x001FFFFF */
     if (addr < 0x00200000) {
@@ -884,6 +902,12 @@ void bus_write32(uint32_t addr, uint32_t val)
         return;
     }
 
+    addr = s24_unmirror(addr);
+
+    /* Sync registers: a word store reaches the 16-bit register too. */
+    if (addr == 0x01040000) { tile_xhout_write((uint16_t)val); return; }
+    if (addr == 0x01060000) { tile_xvout_write((uint16_t)val); return; }
+
     /* System 24 tile RAM: 0x01000000-0x0100FFFF */
     if (addr >= 0x01000000 && addr < 0x01010000) {
         uint32_t off = (addr - 0x01000000) >> 1;
@@ -1043,6 +1067,8 @@ void bus_write16(uint32_t addr, uint16_t val)
         mem_write16(s_program_ram, addr - 0x00200000, val);
         return;
     }
+
+    addr = s24_unmirror(addr);
 
     /* Tile sync registers */
     if (addr >= 0x01040000 && addr < 0x01040002) {
