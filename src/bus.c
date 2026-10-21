@@ -57,7 +57,7 @@ static uint8_t *s_char_ram = NULL;      /* 0x01080000, 512KB */
 static uint8_t *s_backup_sram = NULL;   /* 0x01D00000, 16KB */
 static uint8_t *s_data_rom = NULL;      /* 0x02000000, up to 32MB */
 static uint32_t s_data_rom_size = 0;
-static uint8_t *s_extra_data = NULL;    /* 0x06000000, up to 16MB */
+static uint8_t *s_extra_data = NULL;    /* polygon ROM, geometrizer only */
 static uint32_t s_extra_data_size = 0;
 
 /* Texture ROM: not in the i960 address space at all - only the rasterizer
@@ -624,11 +624,13 @@ uint32_t bus_read32(uint32_t addr)
         return 0;
     }
 
-    /* Extra data: 0x06000000-0x06FFFFFF */
+    /* "Extra" data: 0x06000000-0x06FFFFFF is the data ROM's upper 16MB
+     * again (MAME model2.cpp: region main_data at 0x1000000). The polygon
+     * ROM is the geometrizer's alone and not on the i960's bus. */
     if (addr >= 0x06000000 && addr < 0x07000000) {
-        uint32_t off = addr - 0x06000000;
-        if (s_extra_data && off < s_extra_data_size)
-            return mem_read32(s_extra_data, off);
+        uint32_t off = addr - 0x06000000 + 0x1000000;
+        if (s_data_rom && off < s_data_rom_size)
+            return mem_read32(s_data_rom, off);
         return 0;
     }
 
@@ -1209,7 +1211,7 @@ void bus_load_extra_data(const uint8_t *data, uint32_t size)
     free(s_extra_data);
     s_extra_data = rom_dup(data, size);
     s_extra_data_size = s_extra_data ? size : 0;
-    printf("[bus] Extra data loaded: %u bytes @ 0x06000000\n", s_extra_data_size);
+    printf("[bus] Polygon ROM loaded: %u bytes\n", s_extra_data_size);
 }
 
 void bus_load_texture_rom(const uint8_t *data, uint32_t size)
@@ -1226,7 +1228,7 @@ const uint16_t *bus_get_texture_rom(uint32_t *words_out)
     return (const uint16_t *)s_texture_rom;
 }
 
-/* Polygon ROM is the same image the i960 sees at 0x06000000. */
+/* The polygon ROM, which only the geometrizer reads. */
 const uint32_t *bus_get_polygon_rom(uint32_t *words_out)
 {
     if (words_out) *words_out = s_extra_data_size / 4;
