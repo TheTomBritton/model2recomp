@@ -708,6 +708,9 @@ uint16_t bus_read16(uint32_t addr)
     if (addr >= 0x00200000 && addr < PROGRAM_RAM_TOP)
         return mem_read16(s_program_ram, addr - 0x00200000);
 
+    if (addr >= 0x01C80000 && addr < 0x01C80004)
+        return uart_read((addr >> 1) & 1);
+
     /* Fall through to 32-bit read and extract */
     uint32_t val32 = bus_read32(addr & ~3);
     return (uint16_t)(val32 >> ((addr & 2) * 8));
@@ -1081,6 +1084,15 @@ void bus_write16(uint32_t addr, uint16_t val)
             comm_write8(off + 1, (uint8_t)(val >> 8));
             return;
         }
+    }
+
+    /* The UART's two registers sit on byte lanes 0 and 2: a half-word store
+     * reaches exactly one of them. Going through the 32-bit read-modify-write
+     * below instead re-sent the data register's last byte on every control
+     * write, which the sound program heard as a stray MIDI 0x00. */
+    if (addr >= 0x01C80000 && addr < 0x01C80004) {
+        uart_write((addr >> 1) & 1, (uint8_t)val);
+        return;
     }
 
     /* For other regions, do read-modify-write through 32-bit */
