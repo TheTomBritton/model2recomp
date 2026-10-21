@@ -4,6 +4,12 @@ project(model2recomp C)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# Single-config generators (Make, Ninja) build unoptimised by default; the
+# lifted programs are far too slow for that to be a sensible default.
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 # Find SDL2
 find_package(SDL2 REQUIRED)
 
@@ -31,6 +37,11 @@ target_include_directories(model2recomp
 target_link_libraries(model2recomp
     PUBLIC SDL2::SDL2
 )
+
+# The C library's maths functions live in libm everywhere but Windows.
+if(NOT WIN32)
+    target_link_libraries(model2recomp PUBLIC m)
+endif()
 
 # MSVC settings
 if(MSVC)

@@ -85,6 +85,20 @@ def set_dir(setname):
     return os.path.join(CORPUS, setname)
 
 
+# The lifted programs recurse deeply (CMakeLists.txt reserves 256 MB of stack
+# on MSVC). Elsewhere the main thread's stack is the soft RLIMIT_STACK at exec
+# time, usually 8 MB, which a lifted set exhausts in a few thousand frames.
+STACK_BYTES = 256 << 20
+
+
+def _big_stack():
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
+    want = STACK_BYTES if hard == resource.RLIM_INFINITY else min(STACK_BYTES, hard)
+    if soft != resource.RLIM_INFINITY and soft < want:
+        resource.setrlimit(resource.RLIMIT_STACK, (want, hard))
+
+
 def run(cmd, timeout, cwd=None, env=None, log=None):
     """Run a command, capture everything, never hang the sweep.
 
@@ -106,7 +120,8 @@ def run(cmd, timeout, cwd=None, env=None, log=None):
     with open(path, "wb") as f:
         try:
             p = subprocess.Popen(cmd, cwd=cwd, env=e, stdout=f,
-                                 stderr=subprocess.STDOUT)
+                                 stderr=subprocess.STDOUT,
+                                 preexec_fn=_big_stack if os.name != "nt" else None)
         except OSError as ex:
             return -1, str(ex)
         try:
@@ -307,7 +322,10 @@ def stage_build(sets, args, st):
         # the build that tripped over it, so reconfigure and try once more.
         # Discovery rolling a set back is exactly when this happens, and it
         # cost Desert Tank its attract mode for a whole sweep.
-        if "C1083" in log:
+        # A set lifted after the last configure has no target yet either:
+        # the corpus is globbed at configure time.
+        if ("C1083" in log or "No rule to make target" in log
+                or "unknown target" in log or "MSB1009" in log):
             run(["cmake", "-S", ROOT, "-B", BUILD], timeout=600)
             code, log = run(cmd, timeout=args.build_timeout)
 
