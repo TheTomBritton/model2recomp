@@ -27,6 +27,26 @@ static int g_failures;
 #define FB_WIDTH  496
 #define FB_HEIGHT 384
 
+/*
+ * Pens are not colours: each 5-bit palette field picks one of 32 ramps in
+ * colour-translate RAM, read at luma 0x40, then gamma (video.c palette_rgbx).
+ * The checks here are about tile placement, so give ramp n a known level,
+ * 64 + 6n, and expect whatever the board's gamma curve makes of it. Level 64
+ * is black, and every ramp lands on a different value.
+ */
+static uint32_t lvl(uint32_t n) { return geo_get_gamma()[64 + n * 6]; }
+static uint32_t rgb(uint32_t r, uint32_t g, uint32_t b)
+{
+    return lvl(r) | (lvl(g) << 8) | (lvl(b) << 16);
+}
+
+static void install_ramps(void)
+{
+    for (uint32_t ch = 0; ch < 3; ch++)
+        for (uint32_t n = 0; n < 32; n++)
+            colorxlat_write(ch * 0x2000 + (n << 8) + 0x40, (uint16_t)(64 + n * 6));
+}
+
 /* Tile RAM word offsets, matching video.c */
 #define NAME_TABLE(L) (0x1000u * (L))
 #define HSCROLL       0x5000u
@@ -60,7 +80,8 @@ static void blank_all_layers(void)
 static void test_layer_disable_bit(void)
 {
     blank_all_layers();
-    /* Layer 3 is the opaque one; with it disabled nothing should be written,
+    /* Layer 2 is the opaque one (layer 3 is its window half, drawn only
+     * where the pair mask is set). With every layer off nothing is written,
      * so the framebuffer keeps whatever was there. */
     memset((void *)video_get_framebuffer(), 0x5A, FB_WIDTH * FB_HEIGHT * 4);
     video_render_frame();
@@ -71,23 +92,22 @@ static void test_layer_disable_bit(void)
 static void test_opaque_layer_clears(void)
 {
     blank_all_layers();
-    tile_write(VSCROLL + 3, 0);            /* enable layer 3 */
+    tile_write(VSCROLL + 2, 0);            /* enable layer 2 */
     palette_write(0, 0x001F);              /* pen 0 of colour 0 = full red */
     fill_tile(0, 0);                       /* tile 0 is all pen 0 */
 
     memset((void *)video_get_framebuffer(), 0x5A, FB_WIDTH * FB_HEIGHT * 4);
     video_render_frame();
 
-    /* Red is the low 5 bits, expanded to 8: 0x1F << 3 = 0xF8. */
-    CHECK(pixel_at(0, 0) == 0x0000F8);
-    CHECK(pixel_at(495, 383) == 0x0000F8);
+    CHECK(pixel_at(0, 0) == rgb(31, 0, 0));
+    CHECK(pixel_at(495, 383) == rgb(31, 0, 0));
     printf("  opaque layer clears screen: OK\n");
 }
 
 static void test_tile_pixels_and_colour(void)
 {
     blank_all_layers();
-    tile_write(VSCROLL + 3, 0);
+    tile_write(VSCROLL + 2, 0);
     tile_write(VSCROLL + 0, 0);
     palette_write(0, 0x0000);              /* background black */
 
@@ -109,8 +129,8 @@ static void test_tile_pixels_and_colour(void)
 
     video_render_frame();
 
-    CHECK(pixel_at(0, 0) == 0x00F800);    /* inside the tile: green */
-    CHECK(pixel_at(7, 7) == 0x00F800);    /* still inside (8x8) */
+    CHECK(pixel_at(0, 0) == rgb(0, 31, 0));    /* inside the tile: green */
+    CHECK(pixel_at(7, 7) == rgb(0, 31, 0));    /* still inside (8x8) */
     CHECK(pixel_at(8, 0) == 0x000000);    /* next tile along is empty */
     CHECK(pixel_at(0, 8) == 0x000000);    /* next tile down is empty */
     printf("  tile pixels, size and colour: OK\n");
@@ -125,7 +145,7 @@ static void test_tile_pixels_and_colour(void)
 static void test_pixel_order_within_row(void)
 {
     blank_all_layers();
-    tile_write(VSCROLL + 3, 0);
+    tile_write(VSCROLL + 2, 0);
     tile_write(VSCROLL + 0, 0);
     palette_write(0, 0x0000);
 
@@ -144,7 +164,7 @@ static void test_pixel_order_within_row(void)
     video_render_frame();
 
     for (int x = 0; x < 8; x++) {
-        uint32_t expect_red = (uint32_t)((x + 1) * 2) << 3;
+        uint32_t expect_red = lvl((uint32_t)(x + 1) * 2);
         uint32_t got = pixel_at(x, 0) & 0xFF;
         if (got != expect_red)
             printf("  at x=%d expected red %02X got %02X\n", x, expect_red, got);
@@ -156,9 +176,9 @@ static void test_pixel_order_within_row(void)
 static void test_pen_zero_is_transparent(void)
 {
     blank_all_layers();
-    tile_write(VSCROLL + 3, 0);
+    tile_write(VSCROLL + 2, 0);
     tile_write(VSCROLL + 0, 0);
-    palette_write(0, 0x001F);              /* layer 3 clears to red */
+    palette_write(0, 0x001F);              /* layer 2 clears to red */
     const uint16_t name = 0x0089;          /* tile 0x89, colour 1 */
     palette_write(((name >> 7) & 0xFF) * 16 + 0, 0x7FFF); /* pen 0 white: must not show */
     fill_tile(name & 0x3FFF, 0);           /* solid pen 0 */
@@ -166,15 +186,15 @@ static void test_pen_zero_is_transparent(void)
 
     video_render_frame();
 
-    /* A transparent tile on layer 0 leaves layer 3's red showing. */
-    CHECK(pixel_at(2, 2) == 0x0000F8);
+    /* A transparent tile on layer 0 leaves layer 2's red showing. */
+    CHECK(pixel_at(2, 2) == rgb(31, 0, 0));
     printf("  pen 0 transparent: OK\n");
 }
 
 static void test_scroll(void)
 {
     blank_all_layers();
-    tile_write(VSCROLL + 3, 0);
+    tile_write(VSCROLL + 2, 0);
     tile_write(VSCROLL + 0, 0);
     palette_write(0, 0x0000);
     palette_write(5, 0x7C00);              /* colour 0, pen 5 = blue */
@@ -182,12 +202,12 @@ static void test_scroll(void)
 
     /* Put the tile one cell right and one down, then scroll it to the origin. */
     tile_write(NAME_TABLE(0) + 64 + 1, (uint16_t)3);
-    tile_write(HSCROLL + 0, 8);
+    tile_write(HSCROLL + 0, 0x1F8);        /* horizontal holds the negated origin: -8 */
     tile_write(VSCROLL + 0, 8);
 
     video_render_frame();
 
-    CHECK(pixel_at(0, 0) == 0xF80000);
+    CHECK(pixel_at(0, 0) == rgb(0, 0, 31));
     CHECK(pixel_at(8, 8) == 0x000000);
     printf("  scroll: OK\n");
 }
@@ -200,7 +220,7 @@ static void test_scroll(void)
 static void test_pass_bit_is_not_part_of_tile_index(void)
 {
     blank_all_layers();
-    tile_write(VSCROLL + 3, 0);
+    tile_write(VSCROLL + 2, 0);
     tile_write(VSCROLL + 0, 0);
     palette_write(0, 0x0000);
     palette_write(6, 0x7FFF);              /* colour 0 pen 6 = white */
@@ -210,13 +230,15 @@ static void test_pass_bit_is_not_part_of_tile_index(void)
 
     video_render_frame();
 
-    CHECK(pixel_at(1, 1) == 0xF8F8F8);
+    CHECK(pixel_at(1, 1) == rgb(31, 31, 31));
     printf("  pass bit selects pass, not tile: OK\n");
 }
 
 int main(void)
 {
     video_init();
+    geo_init();         /* builds the gamma curve */
+    install_ramps();
 
     printf("System 24 tilemap renderer:\n");
     test_layer_disable_bit();
