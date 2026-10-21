@@ -70,7 +70,8 @@ BSD-3-Clause — ported from MAME
 
     src/i960.c                  cpu/i960/i960.cpp
     include/model2recomp/i960.h   (register model, condition codes, call and
-                                   return frame cache, IAC reinitialize)
+    include/model2recomp/i960_ops.h  return frame cache, IAC reinitialize,
+                                   chkbit's condition code)
                                 (c) Farfetch'd; R. Belmont
 
     src/io.c                    sega/model1io2.cpp
@@ -99,6 +100,14 @@ Learned from, no code taken
   src/sound.c is a stub and contains no ported code. When it is implemented it
   will most likely derive from MAME's sound/multipcm.cpp ((c) Miguel Angel
   Horna) and sound/scsp.cpp, and this file must be updated when it does.
+
+  m2-hle2 (https://github.com/biggestsonicfan/m2-hle2), rob's
+  (@biggestsonicfan) own high-level Model 2 emulator. It has no licence yet,
+  so no code is taken from it. Its author contributed what it had established
+  about the board in #1 - the idle timer value, the videoctl frame counter,
+  narrow TGP stores, and the location and checksum of Daytona USA's GAME
+  ASSIGNMENTS block that tools/corpus.py rewrites - as facts, written fresh
+  here and checked against MAME. See CONTRIBUTORS.md.
 
   No MAME source is redistributed here; `ref/` is a local scratch directory
   and is git-ignored.
