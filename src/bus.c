@@ -1053,6 +1053,22 @@ void bus_write32(uint32_t addr, uint32_t val)
     /* printf("[bus] Unmapped write32: 0x%08X = 0x%08X\n", addr, val); */
 }
 
+/*
+ * A halfword or byte store to the TGP ports pushes its lane with zeros
+ * around it, as MAME's 32-bit handler and m2-hle2 (model2a.h) do. The
+ * read-modify-write the other regions get would pop a pending reply off the
+ * output FIFO and push it back OR'd into the command.
+ */
+static bool copro_narrow_write(uint32_t addr, uint32_t lane_val)
+{
+    if (addr < 0x00880000 || addr >= 0x00888000)
+        return false;
+    uint32_t a = addr & ~3u;
+    if (a < 0x00884000) copro_function_write((a - 0x00880000) >> 2, lane_val);
+    else                copro_fifo_write(lane_val);
+    return true;
+}
+
 void bus_write16(uint32_t addr, uint16_t val)
 {
     addr &= ~1;
@@ -1089,6 +1105,9 @@ void bus_write16(uint32_t addr, uint16_t val)
         }
     }
 
+    if (copro_narrow_write(addr, (uint32_t)val << ((addr & 2) * 8)))
+        return;
+
     /* For other regions, do read-modify-write through 32-bit */
     uint32_t aligned = addr & ~3;
     uint32_t cur = bus_read32(aligned);
@@ -1118,6 +1137,9 @@ void bus_write8(uint32_t addr, uint8_t val)
             return;
         }
     }
+
+    if (copro_narrow_write(addr, (uint32_t)val << ((addr & 3) * 8)))
+        return;
 
     /* For other regions, do read-modify-write through 32-bit */
     uint32_t aligned = addr & ~3;

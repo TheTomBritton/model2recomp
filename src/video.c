@@ -230,8 +230,9 @@ uint32_t fifo_control_read(void)
 
 uint32_t tgpid_read(uint32_t offset)
 {
-    /* TGP identification - returns chip ID for Model 2 original */
-    static const uint32_t tgp_id[] = { 0x3F800000, 0x3F800000, 0x3F800000, 0x3F800000 };
+    /* TGP identification: the bytes 0,'T','A','H', 0,'A','K','O',
+     * 0,'Z','A','K', 0,'M','T','K' (MAME model2.cpp, tgpid_r). */
+    static const uint32_t tgp_id[] = { 0x48415400, 0x4F4B4100, 0x4B415A00, 0x4B544D00 };
     return (offset < 4) ? tgp_id[offset] : 0;
 }
 
