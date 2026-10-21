@@ -216,6 +216,123 @@ bool model2recomp_begin_frame(void)
         io_set_lightgun(0, (uint16_t)mx, (uint16_t)my, offscreen);
         io_set_input(1, in1);
     }
+    /*
+     * MODEL2_SCRIPT=file is a timeline for headless runs. Each line reads
+     *   <field> <x> <y> [fire|reload|coin1|start1|start2|service]...
+     * The gun sits at x,y from that field until the next line, and the
+     * buttons named are held for 4 fields from it, which is the shortest
+     * press the game registers reliably.
+     */
+    {
+        typedef struct { long field; int x, y; unsigned btn; } step_t;
+        enum { B_FIRE = 1, B_RELOAD = 2, B_COIN1 = 4, B_START1 = 8, B_START2 = 16, B_SERVICE = 32 };
+        static step_t *steps; static int nsteps = -1;
+        if (nsteps < 0) {
+            nsteps = 0;
+            const char *path = getenv("MODEL2_SCRIPT");
+            FILE *f = path ? fopen(path, "r") : NULL;
+            if (f) {
+                char line[256]; int cap = 0;
+                while (fgets(line, sizeof line, f)) {
+                    long fld; int x, y, n;
+                    if (sscanf(line, "%ld %d %d%n", &fld, &x, &y, &n) != 3) continue;
+                    if (nsteps == cap) { cap = cap ? cap * 2 : 64; steps = (step_t *)realloc(steps, (size_t)cap * sizeof *steps); }
+                    step_t *st = &steps[nsteps++];
+                    st->field = fld; st->x = x; st->y = y; st->btn = 0;
+                    for (const char *q = line + n; *q; ) {
+                        while (*q == ' ' || *q == '\t') q++;
+                        if (!*q || *q == '\n' || *q == '#') break;
+                        const char *w = q; while (*q && *q != ' ' && *q != '\t' && *q != '\n') q++;
+                        size_t len = (size_t)(q - w);
+                        #define WORD(str, bit) if (len == strlen(str) && !strncmp(w, str, len)) st->btn |= bit
+                        WORD("fire", B_FIRE); WORD("reload", B_RELOAD); WORD("coin1", B_COIN1);
+                        WORD("start1", B_START1); WORD("start2", B_START2); WORD("service", B_SERVICE);
+                        #undef WORD
+                    }
+                }
+                fclose(f);
+            }
+        }
+        if (nsteps > 0) {
+            const step_t *cur = NULL;
+            for (int i = 0; i < nsteps && steps[i].field <= s_fields_done; i++) cur = &steps[i];
+            if (cur) {
+                mx = cur->x; my = cur->y;
+                bool held = s_fields_done - cur->field < 4;
+                unsigned b = held ? cur->btn : 0;
+                if (b & (B_FIRE | B_RELOAD)) in1 &= ~IN1_P1_TRIGGER;
+                if (b & B_RELOAD) offscreen = true;
+                if (b & B_COIN1)   in0 &= ~IN0_COIN1;
+                if (b & B_START1)  in0 &= ~IN0_START1;
+                if (b & B_START2)  in0 &= ~IN0_START2;
+                if (b & B_SERVICE) in0 &= ~IN0_SERVICE;
+                io_set_lightgun(0, (uint16_t)mx, (uint16_t)my, offscreen);
+                io_set_input(1, in1);
+            }
+        }
+    }
+    /*
+     * MODEL2_RINGBOT=F plays Virtua Cop from field F on: the game draws a
+     * saturated lock-on ring around whichever enemy is about to fire, so the
+     * centroid of the ring-coloured pixels in last field's picture is that
+     * enemy. The bot points the gun there, pulls the trigger every 24 fields
+     * and reloads off-screen after six. Every shot is logged as
+     *   [bot] shot f<field> <x> <y>
+     * so the same shots can be replayed on another build.
+     */
+    {
+        static long bot_from = -1, last_shot = -100000, hold_until = -1, reload_until = -1;
+        static int cyl = 6, aim_x = 248, aim_y = 180;
+        if (bot_from < 0) { const char *e = getenv("MODEL2_RINGBOT"); bot_from = e ? atol(e) : 0; }
+        if (bot_from > 0 && s_fields_done >= bot_from) {
+            const uint8_t *fb = video_get_framebuffer();
+            /* One ring colour at a time: blue, green, yellow, orange, red.
+             * Each class is judged on shape - a ring is a sparse, roughly
+             * square box of pixels - so the sky, a red funnel or an orange
+             * crane, which are solid, do not pass for one. */
+            long cn[5] = {0}, cx0[5], cx1[5], cy0[5], cy1[5];
+            for (int c = 0; c < 5; c++) { cx0[c] = cy0[c] = 100000; cx1[c] = cy1[c] = -1; }
+            if (fb) for (int y = 0; y < 330; y++) for (int x = 0; x < FB_WIDTH; x++) {
+                const uint8_t *q = fb + ((size_t)y * FB_WIDTH + x) * 4;
+                int r = q[0], g = q[1], b = q[2], c = -1;
+                if (b >= 224 && g >= 160 && r <= 96) c = 0;
+                else if (b <= 64 && g >= 224 && r <= 208) c = 1;
+                else if (b <= 64 && g >= 224 && r >= 224) c = 2;
+                else if (b <= 64 && r >= 224 && g >= 80 && g < 224) c = 3;
+                else if (b <= 64 && r >= 224 && g < 80) c = 4;
+                if (c < 0) continue;
+                cn[c]++;
+                if (x < cx0[c]) cx0[c] = x; if (x > cx1[c]) cx1[c] = x;
+                if (y < cy0[c]) cy0[c] = y; if (y > cy1[c]) cy1[c] = y;
+            }
+            long n = 0; int best = -1;
+            for (int c = 0; c < 5; c++) {
+                long w = cx1[c] - cx0[c] + 1, h = cy1[c] - cy0[c] + 1;
+                if (cn[c] < 120 || w < 16 || h < 16 || w > 2 * h || h > 2 * w) continue;
+                if (cn[c] * 10 > w * h * 3) continue;      /* solid, not a ring */
+                if (cn[c] > n) { n = cn[c]; best = c; }
+            }
+            long sx = best >= 0 ? (cx0[best] + cx1[best]) / 2 : 0, sy = best >= 0 ? (cy0[best] + cy1[best]) / 2 : 0;
+            if (n > 0) { sx *= n; sy *= n; }       /* the centroid code below divides by n */
+            if (n >= 300 && s_fields_done >= hold_until) { aim_x = (int)(sx / n); aim_y = (int)(sy / n); }
+            mx = aim_x; my = aim_y;
+            if (s_fields_done < reload_until) {
+                in1 &= ~IN1_P1_TRIGGER; offscreen = true;
+            } else if (s_fields_done < hold_until) {
+                in1 &= ~IN1_P1_TRIGGER;
+            } else if (cyl == 0 && s_fields_done - last_shot >= 12) {
+                reload_until = s_fields_done + 4; cyl = 6;
+                fprintf(stderr, "[bot] reload f%ld\n", s_fields_done);
+                in1 &= ~IN1_P1_TRIGGER; offscreen = true;
+            } else if (n >= 300 && cyl > 0 && s_fields_done - last_shot >= 24) {
+                last_shot = s_fields_done; hold_until = s_fields_done + 4; cyl--;
+                fprintf(stderr, "[bot] shot f%ld %d %d n=%ld\n", s_fields_done, aim_x, aim_y, n);
+                in1 &= ~IN1_P1_TRIGGER;
+            }
+            io_set_lightgun(0, (uint16_t)mx, (uint16_t)my, offscreen);
+            io_set_input(1, in1);
+        }
+    }
     /* Space is an off-screen shot - the reload - for a gun with no second
      * button, as on the other cabinets. */
     if (platform_key_pressed(SDL_SCANCODE_SPACE)) {

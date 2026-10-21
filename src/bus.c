@@ -424,6 +424,19 @@ static void bus_watchdog_tick(void)
     exit(3);
 }
 
+/* MODEL2_BUFHAZ=N: report the first N i960 accesses to buffer RAM made while
+ * the coprocessor still has unconsumed commands, then a count every 1000. */
+static void bufhaz(char rw, uint32_t addr, uint32_t val)
+{
+    static long limit = -1, seen;
+    if (limit < 0) { const char *e = getenv("MODEL2_BUFHAZ"); limit = e ? atol(e) : 0; }
+    if (!limit || !copro_input_pending()) return;
+    seen++;
+    extern uint32_t g_cur_func;
+    if (seen <= limit) fprintf(stderr, "[bufhaz] %c f%ld %08X %08X @%08X\n", rw, model2recomp_fields_done(), addr, val, g_cur_func);
+    else if (seen % 1000 == 0) fprintf(stderr, "[bufhaz] %ld so far (f%ld)\n", seen, model2recomp_fields_done());
+}
+
 uint32_t bus_read32(uint32_t addr)
 {
     bus_watchdog_tick();
@@ -486,6 +499,7 @@ uint32_t bus_read32(uint32_t addr)
     /* Buffer RAM: 0x00900000-0x0091FFFF (mirrored at 0x60000 intervals) */
     if (addr >= 0x00900000 && addr < 0x00980000) {
         uint32_t offset = (addr - 0x00900000) & 0x1FFFF;
+        bufhaz('r', addr, mem_read32(s_bufferram, offset));
         return mem_read32(s_bufferram, offset);
     }
 
@@ -850,6 +864,7 @@ void bus_write32(uint32_t addr, uint32_t val)
     /* Buffer RAM: 0x00900000-0x0091FFFF */
     if (addr >= 0x00900000 && addr < 0x00980000) {
         uint32_t offset = (addr - 0x00900000) & 0x1FFFF;
+        bufhaz('w', addr, val);
         mem_write32(s_bufferram, offset, val);
         return;
     }
