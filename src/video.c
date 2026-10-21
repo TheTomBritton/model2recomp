@@ -215,9 +215,22 @@ void videoctl_write(uint32_t data)
     s_videoctl = data;
 }
 
+/* Only bits 0-1 of 0x0098000C are the game's. Bit 2 is the board's frame
+ * counter: bit 0 of it in 60 Hz mode (render mode bit 2), bit 1 at 30 Hz,
+ * so it flips every other field there (MAME videoctl_r; m2-hle2
+ * irqt_videoctl). A store must not move it. */
+static uint32_t s_field_count = 0;
+
+void videoctl_field_advance(void)
+{
+    s_field_count++;
+}
+
 uint32_t videoctl_read(void)
 {
-    return s_videoctl;
+    uint32_t frame = (s_render_mode & 4) ? (s_field_count & 1)
+                                         : ((s_field_count >> 1) & 1);
+    return (frame << 2) | (s_videoctl & 3);
 }
 
 uint32_t fifo_control_read(void)

@@ -94,6 +94,7 @@ uint32_t polygon_count_read(void);
 /* Video control register (0x0098000C) */
 void videoctl_write(uint32_t data);
 uint32_t videoctl_read(void);
+void videoctl_field_advance(void);   /* the board's frame counter, once a field */
 
 /* FIFO control (0x00980004) */
 uint32_t fifo_control_read(void);
