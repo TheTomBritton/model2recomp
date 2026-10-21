@@ -89,6 +89,11 @@ if(MODEL2RECOMP_BUILD_TESTS)
         model2recomp
         SDL2::SDL2main
     )
+
+    enable_testing()
+    foreach(_t tilemap geometry eeprom93c46)
+        add_test(NAME ${_t} COMMAND model2recomp_test_${_t})
+    endforeach()
 endif()
 
 # --- Corpus sweep -------------------------------------------------------------

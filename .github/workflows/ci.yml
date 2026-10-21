@@ -1,0 +1,35 @@
+# Build the library and run its self-checking tests on every push and PR.
+#
+# The tests need no ROMs. The corpus sweep (tools/corpus.py) does, and ROMs are
+# never in CI, so it is reported as skipped rather than silently left out.
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build -j
+      - run: ctest --test-dir build --output-on-failure
+      - run: echo "corpus sweep - SKIP (needs your own ROM sets; see CORPUS.md)"
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: vcpkg install sdl2:x64-windows
+      - run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
+      - run: cmake --build build --config Release
+      - run: ctest --test-dir build -C Release --output-on-failure
+      - run: echo "corpus sweep - SKIP (needs your own ROM sets; see CORPUS.md)"
