@@ -347,6 +347,15 @@ bool model2recomp_begin_frame(void)
                 fprintf(stderr, "[bot] reload f%ld\n", s_fields_done);
                 in1 &= ~IN1_P1_TRIGGER; offscreen = true;
             } else if (n >= 300 && cyl > 0 && s_fields_done - last_shot >= 24) {
+                /* An enemy behind cover shows only his upper body above the
+                 * ring's centre, so the shots walk up and around it in turn. */
+                static const int offs[6][2] = { {0, 0}, {0, -30}, {0, -55}, {-18, -30}, {18, -30}, {0, -15} };
+                static unsigned shot_k;
+                const int *o = offs[++shot_k % 6];
+                aim_x = (int)(sx / n) + o[0]; aim_y = (int)(sy / n) + o[1];
+                if (aim_x < 0) aim_x = 0; if (aim_y < 0) aim_y = 0;
+                if (aim_x >= FB_WIDTH) aim_x = FB_WIDTH - 1; if (aim_y >= FB_HEIGHT) aim_y = FB_HEIGHT - 1;
+                mx = aim_x; my = aim_y;
                 last_shot = s_fields_done; hold_until = s_fields_done + 4; cyl--;
                 fprintf(stderr, "[bot] shot f%ld %d %d n=%ld\n", s_fields_done, aim_x, aim_y, n);
                 in1 &= ~IN1_P1_TRIGGER;

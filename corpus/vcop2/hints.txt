@@ -1,0 +1,32 @@
+# Entry points vcop2 reaches at run time, harvested from the runtime's dispatch
+# misses by tools/corpus.py discover. Static analysis cannot see a target the
+# game computes, so these are the addresses the running game proved it needs
+# and nothing in the ROM names.
+entry 000043D0
+entry 0000BAA8
+entry 0000BBF4
+entry 0000D71C
+entry 0000D7B0
+entry 0000D834
+entry 0000D8B8
+entry 0000D93C
+entry 0000DA28
+entry 00048560
+entry 00052EBC
+entry 002165B0
+entry FF8166BC
+entry 00043D68
+entry 0004819C
+entry 00043E58
+entry 00043CD0
+entry 00026DD4
+entry 000233B8
+entry 000231C8
+entry 000231E0
+entry 000259F4
+entry 00025A2C
+entry 00043DB0
+entry 00043EE8
+entry 0002BA88
+entry 0002CA90
+entry 0002BAC4

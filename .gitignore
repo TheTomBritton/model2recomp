@@ -26,6 +26,11 @@ AGENTS.md
 __pycache__/
 
 # Corpus sweep scratch: lifted ROM-derived code, region images and captures.
-# Anchored: examples/corpus/ is the sweep's launcher and is committed.
-/corpus/
+# Anchored: examples/corpus/ is the sweep's launcher and is committed. The one
+# thing kept is each set's hints.txt: the entry points the running game proved
+# it needs (tools/corpus.py discover), which are addresses, not ROM content.
+/corpus/*
+!/corpus/*/
+/corpus/*/*
+!/corpus/*/hints.txt
 /build_corpus/
