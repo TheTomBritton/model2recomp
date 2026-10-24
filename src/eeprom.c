@@ -5,6 +5,7 @@
  */
 
 #include "model2recomp/eeprom.h"
+#include "model2recomp/io.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -26,6 +27,11 @@ bool eeprom_load(const char *path)
     FILE *f = fopen(path, "rb");
     if (!f) return false;
     size_t n = fread(s_sram, 1, sizeof(s_sram), f);
+    uint16_t ee[64];
+    if (fread(ee, 1, sizeof(ee), f) == sizeof(ee)) {
+        memcpy(eeprom93c46_words(), ee, sizeof(ee));
+        n += sizeof(ee);
+    }
     fclose(f);
     printf("[eeprom] Loaded %zu bytes from %s\n", n, path);
     return true;
@@ -36,6 +42,7 @@ bool eeprom_save(const char *path)
     FILE *f = fopen(path, "wb");
     if (!f) return false;
     fwrite(s_sram, 1, sizeof(s_sram), f);
+    fwrite(eeprom93c46_words(), 1, 64 * sizeof(uint16_t), f);
     fclose(f);
     printf("[eeprom] Saved to %s\n", path);
     return true;

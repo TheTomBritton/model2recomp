@@ -125,6 +125,11 @@ const uint8_t *model2recomp_get_framebuffer(void);
  */
 void model2recomp_shutdown(void);
 
+/* Where the cabinet keeps its backup SRAM and EEPROM: loaded now (if the file
+ * exists), saved by model2recomp_save_nvram() and at shutdown. */
+void model2recomp_set_nvram(const char *path);
+void model2recomp_save_nvram(void);
+
 #ifdef __cplusplus
 }
 #endif

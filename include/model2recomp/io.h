@@ -87,6 +87,8 @@ void eeprom93c46_reset(void);
 void eeprom93c46_port_a(uint8_t data);
 uint8_t eeprom93c46_port_b(uint8_t inputs);
 bool eeprom93c46_ctrlmode(void);
+/* Its 64 words, for keeping between runs (eeprom_load / eeprom_save). */
+uint16_t *eeprom93c46_words(void);
 
 void sega5649_reset(void);
 uint8_t sega5649_read(uint8_t offset);

@@ -820,6 +820,19 @@ const uint8_t *model2recomp_get_framebuffer(void)
     return video_get_framebuffer();
 }
 
+static const char *s_nvram_path;
+
+void model2recomp_set_nvram(const char *path)
+{
+    s_nvram_path = path;
+    if (path) eeprom_load(path);
+}
+
+void model2recomp_save_nvram(void)
+{
+    if (s_nvram_path) eeprom_save(s_nvram_path);
+}
+
 void model2recomp_shutdown(void)
 {
     bus_report_unmapped();
@@ -827,6 +840,7 @@ void model2recomp_shutdown(void)
     if (!s_initialized) return;
 
     printf("[model2recomp] Shutting down...\n");
+    model2recomp_save_nvram();
 
     eeprom_shutdown();
     io_shutdown();

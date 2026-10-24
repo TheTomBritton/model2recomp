@@ -17,9 +17,14 @@
 #include "model2recomp/io.h"
 #include "game/functions.h"
 
+#include <emscripten.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+
+/* A browser tab has no quit to save the cabinet's settings on, so the page
+ * calls this every few seconds and keeps the file across visits. */
+EMSCRIPTEN_KEEPALIVE void web_save_nvram(void) { model2recomp_save_nvram(); }
 
 int main(int argc, char *argv[])
 {
@@ -32,6 +37,8 @@ int main(int argc, char *argv[])
         fprintf(stderr, "init failed\n");
         return 1;
     }
+    /* The test menu's settings, if the page kept them from a last visit. */
+    model2recomp_set_nvram("vcop2.nv");
     /* MAME's PORT_MINMAX for this title's guns (model2.cpp, vcop2). */
     io_set_gun_range(137, 630, 36, 425);
 

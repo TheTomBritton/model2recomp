@@ -19,7 +19,9 @@ extern "C" {
 void eeprom_init(void);
 void eeprom_shutdown(void);
 
-/* Load/save backup SRAM from/to file */
+/* Load/save backup SRAM from/to file, followed by the CRX boards' 93C46
+ * serial EEPROM (128 bytes), which is where the test menu's settings live.
+ * A file without the EEPROM part leaves it as it was. */
 bool eeprom_load(const char *path);
 bool eeprom_save(const char *path);
 

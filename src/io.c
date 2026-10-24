@@ -504,6 +504,8 @@ void eeprom93c46_port_a(uint8_t data)
 
 bool eeprom93c46_ctrlmode(void) { return s_ee_ctrlmode; }
 
+uint16_t *eeprom93c46_words(void) { return s_ee; }
+
 /* Port B, as the I/O chip presents it. */
 uint8_t eeprom93c46_port_b(uint8_t inputs)
 {
