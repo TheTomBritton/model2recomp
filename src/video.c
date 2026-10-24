@@ -438,6 +438,10 @@ static inline uint32_t palette_rgbx(uint16_t entry)
     return r | (g << 8) | (b << 16) | 0xFF000000u;
 }
 
+/* Every palette entry resolved to a pixel, once per frame: the tilemaps read
+ * one per pixel drawn, and palette_rgbx is four table lookups. */
+static uint32_t s_pal_rgbx[0x2000];
+
 static inline uint16_t tile_word(uint32_t word_offset)
 {
     return *(const uint16_t *)(s_tile_ram + word_offset * 2);
@@ -477,42 +481,63 @@ static void tilemap_draw_rect(int layer, int pass, int opaque, int win,
         int src_y = (y + scroll_y) & 0x1FF;
         int tile_row = src_y >> 3;
         int fine_y = src_y & 7;
-        uint8_t *dst_row = s_framebuffer + (size_t)y * FB_WIDTH * 4;
+        uint32_t *dst_row = (uint32_t *)(s_framebuffer + (size_t)y * FB_WIDTH * 4);
 
-        for (int x = x0; x < x1; x++) {
+        /*
+         * A run of pixels at a time: everything per pixel above the pen - the
+         * name, its pass bit and the window mask - is constant across one
+         * source tile, and the mask across one 8-pixel block of the screen.
+         * A run ends at whichever boundary comes first.
+         */
+        for (int x = x0; x < x1; ) {
+            int src_x = (x + scroll_x) & 0x1FF;
+            int end = x + (8 - (src_x & 7));
+            if (win >= 0) {
+                int blk = (x | 7) + 1;
+                if (blk < end) end = blk;
+            }
+            if (end > x1) end = x1;
+
             if (win >= 0) {
                 uint16_t m = tile_word(maskbase + (uint32_t)y * 4u + (x >> 7));
-                if ((((m >> (15 - ((x >> 3) & 15))) & 1) != 0) != (win != 0))
+                if ((((m >> (15 - ((x >> 3) & 15))) & 1) != 0) != (win != 0)) {
+                    x = end;
                     continue;
+                }
             }
 
-            int src_x = (x + scroll_x) & 0x1FF;
             uint16_t name = tile_word(names + tile_row * 64 + (src_x >> 3));
-
-            if (((name >> 15) & 1) != pass)
+            if (((name >> 15) & 1) != pass) {
+                x = end;
                 continue;
+            }
 
-            /* 32 bytes per tile, 2 words per row of 8 pixels. */
+            /* 32 bytes per tile, 2 words per row of 8 pixels: the row's eight
+             * pens, first pixel in the top nibble. */
             uint32_t row_word = (name & TILE_MASK) * 16u + (uint32_t)fine_y * 2u;
+            const uint16_t *cw = (const uint16_t *)s_char_ram + row_word;
+            uint32_t bits = ((uint32_t)cw[0] << 16) | cw[1];
+            const uint32_t *pal = s_pal_rgbx + ((((name >> 7) & 0xFF) * 16u) & 0x1FFF);
             int fine_x = src_x & 7;
-            uint16_t bits = *(const uint16_t *)(s_char_ram + (row_word + (fine_x >> 2)) * 2);
-            uint32_t pen = (bits >> (12 - 4 * (fine_x & 3))) & 0xF;
 
-            if (pen == 0 && !opaque)
-                continue;
+            for (; x < end; x++, fine_x++) {
+                uint32_t pen = (bits >> (28 - 4 * fine_x)) & 0xF;
+                if (pen == 0 && !opaque)
+                    continue;
+                dst_row[x] = pal[pen];
 
-            uint32_t pal_index = (((name >> 7) & 0xFF) * 16u + pen) & 0x1FFF;
-            *(uint32_t *)(dst_row + x * 4) = palette_rgbx(s_palram[pal_index]);
-
-            /* MODEL2_PROBE=x,y: which tile put this pixel here, and why. */
-            if (x == g_tile_probe_x && y == g_tile_probe_y)
-                fprintf(stderr, "[tile] %d,%d layer=%d pass=%d name=%04X "
-                        "tile=%04X bank=%02X pen=%X palidx=%04X pal=%04X "
-                        "-> %06X\n",
-                        x, y, layer, pass, name, name & TILE_MASK,
-                        (name >> 7) & 0xFF, pen, pal_index,
-                        s_palram[pal_index],
-                        palette_rgbx(s_palram[pal_index]) & 0xFFFFFF);
+                /* MODEL2_PROBE=x,y: which tile put this pixel here, and why. */
+                if (x == g_tile_probe_x && y == g_tile_probe_y) {
+                    uint32_t pal_index = (((name >> 7) & 0xFF) * 16u + pen) & 0x1FFF;
+                    fprintf(stderr, "[tile] %d,%d layer=%d pass=%d name=%04X "
+                            "tile=%04X bank=%02X pen=%X palidx=%04X pal=%04X "
+                            "-> %06X\n",
+                            x, y, layer, pass, name, name & TILE_MASK,
+                            (name >> 7) & 0xFF, pen, pal_index,
+                            s_palram[pal_index],
+                            palette_rgbx(s_palram[pal_index]) & 0xFFFFFF);
+                }
+            }
         }
     }
 }
@@ -524,7 +549,9 @@ static void tilemap_draw_rect(int layer, int pass, int opaque, int win,
  * is set the scroll comes from a table at 0x4000, a different value per
  * scanline. Virtua Cop never sets it.
  */
-static void tilemap_draw_layer(int layer, int pass, int opaque)
+static int s_nolayer;     /* MODEL2_NOLAYER, read once per frame */
+
+static void tilemap_draw_layer(int layer, int pass, int opaque, int by0, int by1)
 {
     uint16_t hscr = tile_word(TILE_HSCROLL + layer);
     uint16_t vscr = tile_word(TILE_VSCROLL + layer);
@@ -533,11 +560,9 @@ static void tilemap_draw_layer(int layer, int pass, int opaque)
     if (vscr & 0x8000)
         return; /* layer disabled */
 
-    {   /* MODEL2_NOLAYER=<bitmask> drops layers, to see who paints what. */
-        const char *nl = getenv("MODEL2_NOLAYER");
-        if (nl && (strtol(nl, NULL, 0) & (1 << layer)))
-            return;
-    }
+    /* MODEL2_NOLAYER=<bitmask> drops layers, to see who paints what. */
+    if (s_nolayer & (1 << layer))
+        return;
 
     /* The scroll registers hold the negated source origin. */
     int scroll_x = (-(int)hscr) & 0x1FF;
@@ -558,33 +583,36 @@ static void tilemap_draw_layer(int layer, int pass, int opaque)
             first = layer; second = layer ^ 1;
             if (!((-(int)vscr) & 0x200)) { first = layer ^ 1; second = layer; }
             tilemap_draw_rect(first,  pass, opaque, -1, scroll_x, scroll_y,
-                              0, 0, FB_WIDTH, v);
+                              0, by0, FB_WIDTH, v < by1 ? v : by1);
             tilemap_draw_rect(second, pass, opaque, -1, scroll_x, scroll_y,
-                              0, v, FB_WIDTH, FB_HEIGHT);
+                              0, v > by0 ? v : by0, FB_WIDTH, by1);
         } else {
             int h = hscr & 0x1FF;
             first = layer; second = layer ^ 1;
             if (!(hscr & 0x200)) { first = layer ^ 1; second = layer; }
             tilemap_draw_rect(first,  pass, opaque, -1, scroll_x, scroll_y,
-                              0, 0, h, FB_HEIGHT);
+                              0, by0, h, by1);
             tilemap_draw_rect(second, pass, opaque, -1, scroll_x, scroll_y,
-                              h, 0, FB_WIDTH, FB_HEIGHT);
+                              h, by0, FB_WIDTH, by1);
         }
         return;
     }
 
     tilemap_draw_rect(layer, pass, opaque, layer & 1, scroll_x, scroll_y,
-                      0, 0, FB_WIDTH, FB_HEIGHT);
+                      0, by0, FB_WIDTH, by1);
 }
 
 /* --- Rendering --- */
 
 unsigned g_fb_copied;
 
-void video_render_frame(void)
+/*
+ * A frame is composed in two steps so that the rows can be shared out: the
+ * per-frame set-up, then any band of rows, in any order, on any thread - each
+ * row reads only tile RAM, the palette and its own row of the 3D bitmap.
+ */
+void video_compose_begin(void)
 {
-    if (!s_framebuffer) return;
-
     {
         static bool read;
         if (!read) {
@@ -594,12 +622,27 @@ void video_render_frame(void)
         }
     }
 
+    {
+        const char *nl = getenv("MODEL2_NOLAYER");
+        s_nolayer = nl ? (int)strtol(nl, NULL, 0) : 0;
+    }
+
+    for (int i = 0; i < 0x2000; i++)
+        s_pal_rgbx[i] = palette_rgbx(s_palram[i]);
+
+    g_fb_copied = 0;
+}
+
+void video_compose_rows(int y0, int y1)
+{
+    if (!s_framebuffer) return;
+
     /*
      * Frame composition, following model2_v.cpp: the tilemaps split around the
      * 3D scene. Layers draw back to front, layer 3 lowest.
      */
     for (int layer = 3; layer >= 0; layer--)
-        tilemap_draw_layer(layer, 0, layer >= 2);
+        tilemap_draw_layer(layer, 0, layer >= 2, y0, y1);
 
     /*
      * The 3D scene, over the back tilemaps and under the front ones. Only
@@ -607,28 +650,34 @@ void video_render_frame(void)
      * was drawn there, so the tilemap below shows through.
      */
     const uint32_t *scene = geo_get_destmap();
-    g_fb_copied = 0;
+    unsigned copied = 0;
     if (scene) {
-        for (int y = 0; y < FB_HEIGHT; y++) {
+        for (int y = y0; y < y1; y++) {
             const uint32_t *src = scene + (size_t)y * 512;
-            uint8_t *dst = s_framebuffer + (size_t)y * FB_WIDTH * 4;
+            uint32_t *dst = (uint32_t *)(s_framebuffer + (size_t)y * FB_WIDTH * 4);
 
             for (int x = 0; x < FB_WIDTH; x++) {
                 uint32_t p = src[x];
                 if (!p) continue;
-                g_fb_copied++;
-                /* The rasterizer already produced 8-bit RGB. */
-                dst[x * 4 + 0] = (uint8_t)(p >> 16);
-                dst[x * 4 + 1] = (uint8_t)(p >> 8);
-                dst[x * 4 + 2] = (uint8_t)p;
-                dst[x * 4 + 3] = 0xFF;
+                copied++;
+                /* The rasterizer already produced 8-bit RGB, as 0x..RRGGBB;
+                 * the framebuffer holds R, G, B, 0xFF in byte order. */
+                dst[x] = ((p >> 16) & 0xFF) | (p & 0xFF00) | ((p & 0xFF) << 16) | 0xFF000000u;
             }
         }
     }
 
-    for (int layer = 3; layer >= 0; layer--)
-        tilemap_draw_layer(layer, 1, 0);
+    __atomic_fetch_add(&g_fb_copied, copied, __ATOMIC_RELAXED);
 
+    for (int layer = 3; layer >= 0; layer--)
+        tilemap_draw_layer(layer, 1, 0, y0, y1);
+}
+
+void video_render_frame(void)
+{
+    if (!s_framebuffer) return;
+    video_compose_begin();
+    video_compose_rows(0, FB_HEIGHT);
 }
 
 const uint8_t *video_get_framebuffer(void)

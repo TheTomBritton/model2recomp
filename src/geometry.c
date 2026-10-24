@@ -1426,7 +1426,8 @@ static uint32_t fetch_texel_bilinear(const shading_t *sh, int32_t miplevel,
  * is only the filtering MAME applies on top.
  */
 static void fill_triangle(const vertex_t *a, const vertex_t *b, const vertex_t *c,
-                          const shading_t *sh, const int16_t *viewport)
+                          const shading_t *sh, const int16_t *viewport,
+                          int band_y0, int band_y1)
 {
     uint32_t *fb = s_destmap;
     if (!fb) return;
@@ -1449,9 +1450,9 @@ static void fill_triangle(const vertex_t *a, const vertex_t *b, const vertex_t *
     if (max_x > vx1) max_x = vx1;
     if (max_y > vy1) max_y = vy1;
     if (min_x < 0) min_x = 0;
-    if (min_y < 0) min_y = 0;
+    if (min_y < band_y0) min_y = band_y0;
     if (max_x > FB_WIDTH)  max_x = FB_WIDTH;
-    if (max_y > FB_HEIGHT) max_y = FB_HEIGHT;
+    if (max_y > band_y1) max_y = band_y1;
     if (min_x >= max_x || min_y >= max_y) return;
 
     float ax = a->x, ay = a->y, bx = b->x, by = b->y, cx = c->x, cy = c->y;
@@ -1470,7 +1471,52 @@ static void fill_triangle(const vertex_t *a, const vertex_t *b, const vertex_t *
         float py = (float)y + 0.5f;
         uint32_t *row = fb + (size_t)y * FB_STRIDE;
 
-        for (int x = min_x; x < max_x; x++) {
+        /*
+         * The row's span. Each of the three inside tests below is linear in
+         * px along a row, so it holds on one side of a crossing point; the
+         * pixels between the crossings are the only ones worth testing. The
+         * span is widened by a pixel each side and the exact test still runs
+         * on every pixel in it, so this only skips pixels that test outside.
+         */
+        int sx0 = min_x, sx1 = max_x;
+        {
+            double inv = inv_area;
+            double a1 = (double)(cy - ay) * inv;
+            double b1 = (-(double)ax * (cy - ay) - ((double)py - ay) * (cx - ax)) * inv;
+            double a2 = -(double)(by - ay) * inv;
+            double b2 = (((double)bx - ax) * (py - ay) + (double)(by - ay) * ax) * inv;
+            double ka[3] = { a1, a2, -(a1 + a2) };
+            double kb[3] = { b1, b2, 1.0 - b1 - b2 };
+            bool empty = false;
+            for (int e = 0; e < 3 && !empty; e++) {
+                double A = ka[e], B = kb[e];
+                /* Room for the float rounding of the exact test: its terms
+                 * reach about 512 * 512 before the scale by 1/area. */
+                double tol = 2.0 * fabs(inv) + 1e-4 * (1.0 + fabs(B) + fabs(A) * 512.0);
+                if (fabs(A) < 1e-9) {
+                    if (B < -tol) empty = true;
+                    continue;
+                }
+                double cross = -(B + tol) / A - 0.5;   /* A px + B >= -tol, in x not px */
+                if (A > 0) {
+                    double lo = floor(cross) - 1.0;
+                    if (lo > sx0) sx0 = lo > max_x ? max_x : (int)lo;
+                } else {
+                    double hi = ceil(cross) + 2.0;
+                    if (hi < sx1) sx1 = hi < min_x ? min_x : (int)hi;
+                }
+            }
+            if (empty) continue;
+        }
+
+        for (int x = sx0; x < sx1; x++) {
+            if (row[x])
+                continue;       /* already covered by nearer geometry */
+
+            /* The checkerboard leaves every other pixel of the grid alone. */
+            if (sh->checker && !((x ^ y) & 1))
+                continue;
+
             float px = (float)x + 0.5f;
 
             /* Barycentric weights: w1 and w2 for b and c, the rest for a. */
@@ -1479,13 +1525,6 @@ static void fill_triangle(const vertex_t *a, const vertex_t *b, const vertex_t *
 
             if (w1 < 0.0f || w2 < 0.0f || (w1 + w2) > 1.0f)
                 continue;
-
-            /* The checkerboard leaves every other pixel of the grid alone. */
-            if (sh->checker && !((x ^ y) & 1))
-                continue;
-
-            if (row[x])
-                continue;       /* already covered by nearer geometry */
 
             if (!sh->textured) {
                 row[x] = flat | 0xFF000000u;
@@ -1642,13 +1681,163 @@ static void setup_shading(const polygon_t *poly, shading_t *sh)
                                                         : sh->texheight;
         sh->max_level = 30 - count_leading_zeros32(smaller);
     }
+
 }
 
-void geo_render_polygons(void)
+/*
+ * The fill runs in horizontal slices, spread over a pool of threads.
+ *
+ * The walk above resolves every polygon - shading, projection, the 1/z set-up -
+ * and queues its triangles in draw order; then each slice of the screen draws
+ * the whole queue clipped to its rows. A pixel lives in exactly one slice and
+ * sees the triangles in the same order as before, so the first writer is the
+ * same and the picture is identical however the slices are shared out. Slices
+ * are taken from a counter, so a thread that drew sky moves on to the next
+ * one while another is still in the street.
+ *
+ * The thread that walked the list draws slices too, then waits for the rest:
+ * the guest cannot move on until the frame it is about to show is finished.
+ * MODEL2_RENDER_THREADS sets the pool's size; 0 or 1 draws on the walking
+ * thread alone.
+ */
+typedef struct {
+    const vertex_t *a, *b, *c;
+    const int16_t  *viewport;
+    int             shade;
+} tri_t;
+
+static shading_t *s_shades;
+static int        s_nshades, s_cap_shades;
+static tri_t     *s_tris;
+static int        s_ntris, s_cap_tris;
+
+static int new_shading(void)
+{
+    if (s_nshades == s_cap_shades) {
+        int cap = s_cap_shades ? s_cap_shades * 2 : 4096;
+        shading_t *n = (shading_t *)realloc(s_shades, (size_t)cap * sizeof *n);
+        if (!n) return -1;
+        s_shades = n; s_cap_shades = cap;
+    }
+    return s_nshades++;
+}
+
+static void queue_triangle(const vertex_t *a, const vertex_t *b, const vertex_t *c,
+                           int shade, const int16_t *viewport)
+{
+    if (s_ntris == s_cap_tris) {
+        int cap = s_cap_tris ? s_cap_tris * 2 : 8192;
+        tri_t *n = (tri_t *)realloc(s_tris, (size_t)cap * sizeof *n);
+        if (!n) return;
+        s_tris = n; s_cap_tris = cap;
+    }
+    s_tris[s_ntris++] = (tri_t){ a, b, c, viewport, shade };
+}
+
+#define SLICE_ROWS 8
+#define NUM_SLICES ((FB_HEIGHT + SLICE_ROWS - 1) / SLICE_ROWS)
+
+/* What this round's slices do: fill the 3D bitmap, compose the frame, or both. */
+static bool s_slice_fill, s_slice_compose;
+
+static void raster_slice(int k)
+{
+    int y0 = k * SLICE_ROWS, y1 = y0 + SLICE_ROWS;
+    if (y1 > FB_HEIGHT) y1 = FB_HEIGHT;
+    if (s_slice_fill) {
+        memset(s_destmap + (size_t)y0 * FB_STRIDE, 0,
+               (size_t)(y1 - y0) * FB_STRIDE * sizeof(uint32_t));
+        for (int i = 0; i < s_ntris; i++) {
+            const tri_t *t = &s_tris[i];
+            fill_triangle(t->a, t->b, t->c, &s_shades[t->shade], t->viewport, y0, y1);
+        }
+    }
+    if (s_slice_compose)
+        video_compose_rows(y0, y1);
+}
+
+#ifdef __EMSCRIPTEN_PTHREADS__
+#include <pthread.h>
+#include <stdatomic.h>
+#include <emscripten/threading.h>
+
+static int             s_nworkers = -1;
+static pthread_mutex_t s_pool_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  s_pool_wake = PTHREAD_COND_INITIALIZER;
+static int             s_pool_gen;
+static atomic_int      s_next_slice, s_workers_done;
+
+static void raster_slices(void)
+{
+    int k;
+    while ((k = atomic_fetch_add(&s_next_slice, 1)) < NUM_SLICES)
+        raster_slice(k);
+}
+
+static void *raster_worker(void *arg)
+{
+    (void)arg;
+    int seen = 0;
+    for (;;) {
+        pthread_mutex_lock(&s_pool_lock);
+        while (s_pool_gen == seen)
+            pthread_cond_wait(&s_pool_wake, &s_pool_lock);
+        seen = s_pool_gen;
+        pthread_mutex_unlock(&s_pool_lock);
+        raster_slices();
+        atomic_fetch_add(&s_workers_done, 1);
+    }
+    return NULL;
+}
+
+static void raster_pool_start(void)
+{
+    const char *e = getenv("MODEL2_RENDER_THREADS");
+    int want = e ? atoi(e) : emscripten_num_logical_cores() - 2;
+    if (want > 8) want = 8;     /* the link's PTHREAD_POOL_SIZE is 7, plus this thread */
+    s_nworkers = 0;
+    for (int i = 0; i < want - 1; i++) {
+        pthread_t t;
+        if (pthread_create(&t, NULL, raster_worker, NULL) != 0) break;
+        pthread_detach(t);
+        s_nworkers++;
+    }
+    printf("[geo] %d raster threads\n", s_nworkers + 1);
+}
+
+static void raster_run(void)
+{
+    if (s_nworkers < 0) raster_pool_start();
+    if (s_nworkers == 0) {
+        for (int k = 0; k < NUM_SLICES; k++) raster_slice(k);
+        return;
+    }
+    atomic_store(&s_next_slice, 0);
+    atomic_store(&s_workers_done, 0);
+    pthread_mutex_lock(&s_pool_lock);
+    s_pool_gen++;
+    pthread_cond_broadcast(&s_pool_wake);
+    pthread_mutex_unlock(&s_pool_lock);
+    raster_slices();
+    while (atomic_load(&s_workers_done) < s_nworkers)
+        ;   /* the last slices are a fraction of a millisecond away */
+}
+#else
+static void raster_run(void)
+{
+    for (int k = 0; k < NUM_SLICES; k++) raster_slice(k);
+}
+#endif
+
+/*
+ * Walk the polygon list and queue its triangles. False when there is nothing
+ * to fill: the field keeps the bitmap it has.
+ */
+static bool geo_prepare(void)
 {
     raster_state_t *raster = s_raster;
     if (!raster || !s_destmap)
-        return;
+        return false;
 
     /* The game submits a display list every other field. Rendering is
      * destructive - projection rewrites each vertex in place - so a field with
@@ -1660,12 +1849,14 @@ void geo_render_polygons(void)
       if (e) sscanf(e, "%d,%d", &g_probe_x, &g_probe_y); }
 
     if (s_render_done)
-        return;
+        return false;
 
-    memset(s_destmap, 0, (size_t)FB_STRIDE * FB_HEIGHT * sizeof(uint32_t));
+    s_ntris = 0;
+    s_nshades = 0;
 
+    /* An empty list clears the bitmap, and is cleared again next field. */
     if (raster->poly_list_index == 0)
-        return;
+        return true;
 
     for (int window = raster->cur_window; window >= 0; window--) {
         for (int32_t z = raster->min_z; z <= raster->max_z; z++) {
@@ -1673,9 +1864,12 @@ void geo_render_polygons(void)
 
             while (poly) {
                 if (poly->window == window) {
-                    shading_t sh;
-                    memset(&sh, 0, sizeof(sh));
-                    setup_shading(poly, &sh);
+                    int sh_index = new_shading();
+                    if (sh_index < 0) { poly = poly->next; continue; }
+                    shading_t *shp = &s_shades[sh_index];
+                    memset(shp, 0, sizeof(*shp));
+                    setup_shading(poly, shp);
+                    shading_t sh = *shp;
 
                     /* MODEL2_SHADE=N dumps how the first N polygons of a
                      * field resolve their colour: a polygon that draws wrong
@@ -1729,8 +1923,8 @@ void geo_render_polygons(void)
                     }
 
                     for (int i = 1; i + 1 < poly->num_vertices; i++)
-                        fill_triangle(&poly->v[0], &poly->v[i], &poly->v[i + 1],
-                                      &sh, poly->viewport);
+                        queue_triangle(&poly->v[0], &poly->v[i], &poly->v[i + 1],
+                                       sh_index, poly->viewport);
                 }
                 poly = poly->next;
             }
@@ -1738,6 +1932,23 @@ void geo_render_polygons(void)
     }
 
     s_render_done = true;
+    return true;
+}
+
+void geo_render_polygons(void)
+{
+    s_slice_fill = geo_prepare();
+    s_slice_compose = false;
+    if (s_slice_fill)
+        raster_run();
+}
+
+void geo_render_field(void)
+{
+    s_slice_fill = geo_prepare();
+    s_slice_compose = true;
+    video_compose_begin();
+    raster_run();
 }
 
 /* ---- Lifecycle ---- */
