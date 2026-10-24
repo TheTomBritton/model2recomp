@@ -202,6 +202,12 @@ bool platform_init(const char *title, int width, int height, int scale)
 
     s_frame_start = SDL_GetPerformanceCounter();
 
+    {
+        SDL_RendererInfo ri;
+        if (SDL_GetRendererInfo(s_renderer, &ri) == 0)
+            printf("[platform] renderer %s, %u texture formats, first %s\n", ri.name,
+                   ri.num_texture_formats, ri.num_texture_formats ? SDL_GetPixelFormatName(ri.texture_formats[0]) : "-");
+    }
     printf("[platform] SDL2 initialized: %dx%d @ %dx\n", width, height, scale);
     return true;
 }
