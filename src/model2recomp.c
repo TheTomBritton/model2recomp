@@ -552,7 +552,16 @@ uint32_t model2recomp_field_sync(void)
     static bool s_in_field = false;
 
     uint32_t now = SDL_GetTicks();
-    if (!s_in_field && (platform_fast_mode() || (int32_t)(now - s_next_field_ms) >= 0)) {
+#ifdef __EMSCRIPTEN__
+    /* The browser build paces fields on the display's frames, in
+     * platform_frame_sync. A wall-clock gate as well only makes the guest spin
+     * on the status register, and at 17 ms it is longer than a 60 Hz frame,
+     * so every few dozen fields it slipped past one and the field took two. */
+    bool due = true;
+#else
+    bool due = platform_fast_mode() || (int32_t)(now - s_next_field_ms) >= 0;
+#endif
+    if (!s_in_field && due) {
         s_in_field = true;
         s_next_field_ms = now + (FRAME_US / 1000);
 
