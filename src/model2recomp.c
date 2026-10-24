@@ -398,8 +398,7 @@ void model2recomp_end_frame(void)
     sound_generate_samples(s_audio_buffer, audio_n);
 
     /* Render video: 3D first into its own bitmap, then composite */
-    geo_render_polygons();
-    video_render_frame();
+    geo_render_field();
 
     /* Present to screen */
     const uint8_t *fb = video_get_framebuffer();

@@ -65,6 +65,10 @@ bool geo_take_parsed_since_field(void);
 
 /* Project and rasterize the polygon list into the 3D bitmap. */
 void geo_render_polygons(void);
+/* The whole field: the 3D bitmap, then the frame composed over it - the same
+ * result as geo_render_polygons and video_render_frame in turn, drawn as one
+ * pass of row bands so both share the render threads. */
+void geo_render_field(void);
 
 /* The rendered 3D bitmap: 512 pixels per row, XRGB8888, 0 where nothing drawn. */
 const uint32_t *geo_get_destmap(void);
@@ -152,6 +156,9 @@ void lumaram_write(uint32_t offset, uint8_t data);
 /* --- Rendering --- */
 /* Render current frame to the output framebuffer (called by end_frame) */
 void video_render_frame(void);
+/* video_render_frame in parts: the per-frame set-up, then bands of rows. */
+void video_compose_begin(void);
+void video_compose_rows(int y0, int y1);
 
 /* Get the rendered output (496x384 RGBX8888) */
 const uint8_t *video_get_framebuffer(void);

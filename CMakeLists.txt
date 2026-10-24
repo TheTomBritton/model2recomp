@@ -10,6 +10,10 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 if(EMSCRIPTEN)
     add_compile_options(-sUSE_SDL=2)
     add_link_options(-sUSE_SDL=2)
+    # Musashi setjmps on every m68k_execute: native wasm exceptions keep that
+    # in wasm, where the default emulation calls out to JavaScript each time.
+    add_compile_options(-sSUPPORT_LONGJMP=wasm)
+    add_link_options(-sSUPPORT_LONGJMP=wasm)
     add_library(SDL2::SDL2 INTERFACE IMPORTED)
     add_library(SDL2::SDL2main INTERFACE IMPORTED)
 else()
@@ -171,12 +175,22 @@ if(EMSCRIPTEN AND MODEL2RECOMP_WEB_SET)
     target_link_libraries(${_set}web PRIVATE model2recomp)
     target_compile_options(${_set}web PRIVATE -w -mtail-call)
     target_compile_options(model2recomp PRIVATE -mtail-call)
+    # The 3D fill runs on a pool of threads (geometry.c, raster_run), which
+    # needs the page served cross-origin isolated. MODEL2RECOMP_WEB_THREADS=OFF
+    # builds the single-threaded module, which needs nothing from the server.
+    option(MODEL2RECOMP_WEB_THREADS "Fill the 3D scene on a pool of threads" ON)
+    set(_env web)
+    if(MODEL2RECOMP_WEB_THREADS)
+        target_compile_options(model2recomp PUBLIC -pthread)
+        target_link_options(${_set}web PRIVATE -pthread -sPTHREAD_POOL_SIZE=7)
+        set(_env web,worker)
+    endif()
     string(TOUPPER "${_set}" _SET)
     target_link_options(${_set}web PRIVATE
         -mtail-call
         -sJSPI=1
         -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=335544320 -sSTACK_SIZE=67108864
-        -sMODULARIZE=1 -sEXPORT_NAME=createModel2_${_set} -sENVIRONMENT=web
+        -sMODULARIZE=1 -sEXPORT_NAME=createModel2_${_set} -sENVIRONMENT=${_env}
         -sINVOKE_RUN=0
         -sEXPORTED_RUNTIME_METHODS=FS,callMain,ENV,ccall
         -sEXPORTED_FUNCTIONS=_main,_platform_set_gun_border
